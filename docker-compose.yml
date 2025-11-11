@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:latest
+    command: postgres -c 'max_connections=1000'
+    container_name: morefixes_db
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
+    volumes:
+      - postgres_data2:/var/lib/postgresql/data
+      - ./dataset/postgrescvedumper-2024-09-26.sql:/docker-entrypoint-initdb.d/postgrescvedumper-2024-09-26.sql
+
+volumes:
+  postgres_data2:

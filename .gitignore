@@ -1,0 +1,15 @@
+.DS_Store
+/output
+/logs
+/data
+/models
+/results
+/notebooks
+/tests
+/docs
+/examples
+/tutorials
+/utils
+/configs
+/environments
+/requirements.txt
