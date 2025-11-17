@@ -187,7 +187,7 @@ representations = matcher.compute_all_representations(code, language="java")
 # - regex_candidate
 
 # 计算两个代码的相似度
-similarity = matcher.compute_similarity(repr1, repr2, method="jaccard")
+similarity = matcher.compute_similarity(repr1, repr2, method="exact")  # 或使用 "combined" 获得更精确的匹配
 ```
 
 ### 从 DataFrame 找出相似的修复
@@ -207,7 +207,7 @@ similar_fixes_df, pattern_records_df = matcher.find_similar_fixes(
     vulnerable_code_df,
     top_n=10,                    # 返回前10个最相似的
     similarity_threshold=0.5,    # 相似度阈值
-    similarity_method="combined", # 相似度计算方法
+    similarity_method="exact",    # 相似度计算方法（默认 exact，或使用 "combined" 获得更精确的匹配）
     use_keyword_grouping=True,   # 使用 keywords 预分组以提高效率
     create_patterns=True,        # 创建模式记录
 )
@@ -374,9 +374,9 @@ similar_fixes_df, pattern_records_df = matcher.find_similar_fixes(
 2. **阈值**: 根据实际需求调整 `similarity_threshold`，过低会产生太多误报，过高会漏掉相似项
 3. **方法选择**: 
    - `jaccard`: 适合一般相似度比较
-   - `exact`: 适合查找完全相同的模式
+   - `exact`: 适合查找完全相同的模式（默认，性能较好）
    - `ast_hash`: 适合查找结构相同的模式
-   - `combined`: 综合匹配，最准确（推荐）
+   - `combined`: 综合匹配，最准确（推荐用于需要更高精度的场景）
 4. **语言支持**: 
    - Java: 支持 AST 解析（需要 javalang）
    - 其他语言: 使用正则表达式方法进行标识符标准化
@@ -427,7 +427,7 @@ similar_fixes_df, pattern_records_df = matcher.find_similar_fixes(
     df,
     top_n=10,
     similarity_threshold=0.5,
-    similarity_method="combined",
+    similarity_method="exact",  # 默认使用 exact，或使用 "combined" 获得更精确的匹配
     use_keyword_grouping=True,
     create_patterns=True,
 )

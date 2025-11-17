@@ -49,10 +49,11 @@ pip install -r requirements.txt
 
 ### 配置环境变量
 
-复制 `env.sample` 文件并配置数据库连接信息：
+创建 `.env` 文件并配置数据库连接信息：
 
 ```bash
-cp env.sample .env
+# 在项目根目录创建 .env 文件
+touch .env
 ```
 
 编辑 `.env` 文件，设置以下变量：
@@ -64,6 +65,8 @@ DB_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=morefixes
 ```
+
+**注意**: `.env` 文件包含敏感信息，请确保已添加到 `.gitignore` 中，不要提交到版本控制系统。
 
 ## 🎯 快速开始
 
@@ -84,13 +87,13 @@ python vulnerability_pattern_miner.py --top-n 3 --min-score 65 --languages java
 
 ```bash
 # 提取前 5 个最常见的 Java 漏洞模式
-python detect_recurring_vulnerabilities.py --top-n 5 --languages java
+python vulnerability_pattern_miner.py --top-n 5 --languages java
 
 # 提取 Go 语言的漏洞模式
-python detect_recurring_vulnerabilities.py --top-n 3 --languages go
+python vulnerability_pattern_miner.py --top-n 3 --languages go
 
 # 提取多个语言的漏洞模式
-python detect_recurring_vulnerabilities.py --top-n 3 --languages java python go
+python vulnerability_pattern_miner.py --top-n 3 --languages java python go
 ```
 
 ## 📊 工作流程
@@ -151,13 +154,15 @@ python detect_recurring_vulnerabilities.py --top-n 3 --languages java python go
 ## 📁 模块结构
 
 ```
-Morefixes/
+liacs_system_software_security/
 ├── vulnerability_pattern_miner.py       # 主程序入口
 ├── code_similarity_matcher.py          # 代码相似性匹配模块
 ├── github_query_generator.py           # GitHub 查询生成模块
 ├── DATABASE_TABLES_EXPLANATION.md      # 数据库表结构说明
 ├── VULNERABILITY_PATTERN_MINING.md     # 漏洞模式挖掘流程文档
 ├── SIMILARITY_MATCHER_README.md        # 相似性匹配器文档
+├── requirements.txt                    # Python 依赖包列表
+├── docker-compose.yml                  # Docker 配置（可选）
 └── output/                             # 输出目录
     ├── extract_java_vulnerable_code.csv
     ├── pattern_records_top{n}.csv
@@ -215,7 +220,7 @@ vulnerable_code_df = extract_java_vulnerable_code(
 pattern_records_df = process_recurring_patterns(
     vulnerable_code_df,
     top_n=3,
-    similarity_method="combined",
+    similarity_method="exact",
     similarity_threshold=0.5
 )
 
@@ -298,10 +303,10 @@ similar_fixes_df, pattern_records_df = matcher.find_similar_fixes(
 
 ### 相似度计算方法
 
-- `jaccard`: 基于 token shingles 的 Jaccard 相似度（默认）
-- `exact`: 精确匹配（比较 normalized_text）
+- `jaccard`: 基于 token shingles 的 Jaccard 相似度
+- `exact`: 精确匹配（比较 normalized_text，默认）
 - `ast_hash`: AST 结构相似度
-- `combined`: 综合多特征相似度（推荐）
+- `combined`: 综合多特征相似度（推荐用于更精确的匹配）
 
 ### 相似度阈值
 

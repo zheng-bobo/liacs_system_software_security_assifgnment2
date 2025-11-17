@@ -498,8 +498,9 @@ class CodeSimilarityMatcher:
             return None
 
         # 将 JSON 转换为字符串并生成哈希
-        ast_json_str = json.dumps(ast_json, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(ast_json_str.encode()).hexdigest()[:16]
+        # 使用 ensure_ascii=True 避免 Unicode 编码问题，或使用 errors='replace' 处理无法编码的字符
+        ast_json_str = json.dumps(ast_json, sort_keys=True, ensure_ascii=True)
+        return hashlib.sha256(ast_json_str.encode('utf-8', errors='replace')).hexdigest()[:16]
 
     def extract_keyword_tokens(self, code: str, language: str = "java") -> set:
         """
