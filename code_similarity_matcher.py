@@ -78,23 +78,133 @@ class CodeSimilarityMatcher:
         self.func_counter = 0
         self.class_counter = 0
 
+    def _remove_comments(self, code: str, language: str = "java") -> str:
+        """
+        去除代码中的注释和空白行
+
+        Args:
+            code: 原始代码
+            language: 编程语言，默认 'java'
+
+        Returns:
+            去除注释和空白行后的代码
+        """
+        if not code:
+            return ""
+
+        result = []
+        i = 0
+        n = len(code)
+        in_string = False
+        string_char = None  # 记录字符串引号类型 (' 或 ")
+
+        while i < n:
+            # 先处理字符串字面量，避免删除字符串内的注释符号
+            if not in_string:
+                # 不在字符串内，检查是否进入字符串
+                if code[i] == '"' or code[i] == "'":
+                    string_char = code[i]
+                    in_string = True
+                    result.append(code[i])
+                    i += 1
+                    continue
+            else:
+                # 在字符串内
+                if code[i] == "\\" and i + 1 < n:
+                    # 转义字符，跳过下一个字符
+                    result.append(code[i])
+                    result.append(code[i + 1])
+                    i += 2
+                    continue
+                elif code[i] == string_char:
+                    # 字符串结束
+                    result.append(code[i])
+                    in_string = False
+                    string_char = None
+                    i += 1
+                    continue
+                else:
+                    # 字符串内容，保留
+                    result.append(code[i])
+                    i += 1
+                    continue
+
+            # 不在字符串内，处理注释
+            # 处理多行注释 /* ... */
+            if i < n - 1 and code[i : i + 2] == "/*":
+                # 找到注释结束位置
+                j = code.find("*/", i + 2)
+                if j != -1:
+                    i = j + 2
+                    continue
+                else:
+                    # 注释未闭合，跳过剩余部分
+                    break
+
+            # 处理单行注释 // (Java/C/C++)
+            if language.lower() in [
+                "java",
+                "c",
+                "cpp",
+                "c++",
+                "javascript",
+                "typescript",
+            ]:
+                if i < n - 1 and code[i : i + 2] == "//":
+                    # 找到行尾
+                    j = code.find("\n", i + 2)
+                    if j != -1:
+                        i = j + 1
+                        continue
+                    else:
+                        # 没有换行符，跳过剩余部分
+                        break
+
+            # 处理 Python 单行注释 #
+            if language.lower() == "python":
+                if code[i] == "#":
+                    # 找到行尾
+                    j = code.find("\n", i + 1)
+                    if j != -1:
+                        i = j + 1
+                        continue
+                    else:
+                        # 没有换行符，跳过剩余部分
+                        break
+
+            # 普通字符，保留
+            result.append(code[i])
+            i += 1
+
+        # 去除注释后，去除空白行
+        code_no_comments = "".join(result)
+        # 按行分割，过滤掉空白行（只包含空白字符的行）
+        lines = code_no_comments.split("\n")
+        non_empty_lines = [line for line in lines if line.strip()]
+
+        return "\n".join(non_empty_lines)
+
     def extract_whitespace_normalized(
-        self, code: str, preserve_newlines: bool = False
+        self, code: str, preserve_newlines: bool = False, language: str = "java"
     ) -> str:
         """
         Step 4.2 格式标准化（Whitespace normalization）
 
-        统一缩进、空格、去除多余换行。
+        统一缩进、空格、去除多余换行和注释。
 
         Args:
             code: 原始代码
             preserve_newlines: 是否保留换行符，默认 False（用空格连接）
+            language: 编程语言，默认 'java'
 
         Returns:
             标准化空白字符后的代码
         """
         if not code:
             return ""
+
+        # 先去除注释
+        code = self._remove_comments(code, language)
 
         # 去除所有行首空白字符
         lines = [line.lstrip() for line in code.split("\n")]
@@ -130,7 +240,7 @@ class CodeSimilarityMatcher:
 
         # 先进行空白字符标准化（保留换行，但统一空格和去除缩进）
         whitespace_normalized = self.extract_whitespace_normalized(
-            code, preserve_newlines=True
+            code, preserve_newlines=True, language=language
         )
 
         # 再进行标识符归一化
@@ -156,7 +266,7 @@ class CodeSimilarityMatcher:
 
         # 步骤1: 先进行空白字符标准化（保留换行，但统一空格和去除缩进）
         whitespace_normalized = self.extract_whitespace_normalized(
-            code, preserve_newlines=True
+            code, preserve_newlines=True, language=language
         )
 
         # 步骤2: 再进行变量名标准化（VAR1, VAR2...）
@@ -457,7 +567,7 @@ class CodeSimilarityMatcher:
         # 使用原始代码构建 AST（不进行变量名标准化，保留真实结构）
         # 只进行空白字符标准化以统一格式
         normalized_code = self.extract_whitespace_normalized(
-            code, preserve_newlines=True
+            code, preserve_newlines=True, language=language
         )
 
         try:
@@ -602,7 +712,7 @@ class CodeSimilarityMatcher:
         # 如果使用 AST，可以提取更准确的方法调用和类名
         if language.lower() == "java" and JAVALANG_AVAILABLE:
             normalized_code = self.extract_whitespace_normalized(
-                code, preserve_newlines=True
+                code, preserve_newlines=True, language=language
             )
             try:
                 tree = javalang.parse.parse(normalized_code)
@@ -847,7 +957,7 @@ class CodeSimilarityMatcher:
         try:
             # 优化：只计算一次空白字符标准化（多个方法都需要）
             whitespace_normalized = self.extract_whitespace_normalized(
-                code, preserve_newlines=True
+                code, preserve_newlines=True, language=language
             )
 
             # 优化：只计算一次标识符归一化（normalized_text 和 token_shingles 都需要）
@@ -1131,7 +1241,7 @@ class CodeSimilarityMatcher:
                 row = df.iloc[idx]
 
                 # 收集标准化文本
-                normalized_text = repr.get("normalized_text", "")
+                normalized_text = repr.get("normalized_text") or ""
                 if normalized_text:
                     normalized_texts.append(normalized_text)
 
@@ -1258,17 +1368,23 @@ class CodeSimilarityMatcher:
                 skipped_count += 1
                 continue
 
+            # 去除注释后再检查长度，更准确地判断代码实际大小
+            code_before_no_comments = self._remove_comments(code_before, language)
+
             # 限制代码长度，避免处理过大的代码片段（超过 50000 字符）
-            if len(code_before) > 50000:
+            if len(code_before_no_comments) > 50000:
                 logger.warning(
-                    f"跳过过长的代码片段（索引 {idx}，长度 {len(code_before)}）"
+                    f"跳过过长的代码片段（索引 {idx}，去除注释后长度 {len(code_before_no_comments)}）"
                 )
                 skipped_count += 1
                 continue
 
             try:
                 # 只计算漏洞代码的表示（用于模式匹配）
-                repr_before = self.compute_all_representations(code_before, language)
+                # 使用去除注释后的代码，避免重复处理
+                repr_before = self.compute_all_representations(
+                    code_before_no_comments, language
+                )
 
                 representations.append(
                     {
@@ -1395,13 +1511,13 @@ class CodeSimilarityMatcher:
                     "fix1_repo": row1.get("repo_url", ""),
                     "fix1_code_before": row1.get("code_before", "")[:200],
                     "fix1_code_after": row1.get("code_after", "")[:200],
-                    "fix1_normalized": repr1.get("normalized_text", "")[:200],
+                    "fix1_normalized": (repr1.get("normalized_text") or "")[:200],
                     "fix2_hash": sim_row["fix2_hash"],
                     "fix2_cve": sim_row["fix2_cve"],
                     "fix2_repo": row2.get("repo_url", ""),
                     "fix2_code_before": row2.get("code_before", "")[:200],
                     "fix2_code_after": row2.get("code_after", "")[:200],
-                    "fix2_normalized": repr2.get("normalized_text", "")[:200],
+                    "fix2_normalized": (repr2.get("normalized_text") or "")[:200],
                 }
             )
 
@@ -1417,7 +1533,7 @@ class CodeSimilarityMatcher:
             for idx, repr_data in enumerate(representations):
                 repr = repr_data["repr"]
                 ast_hash = repr.get("ast_subtree_hash")
-                normalized_text = repr.get("normalized_text", "")
+                normalized_text = repr.get("normalized_text") or ""
 
                 # 使用 AST hash 作为主要分组键（最稳定）
                 group_key = (
