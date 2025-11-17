@@ -13,3 +13,5 @@
 /configs
 /environments
 /requirements.txt
+__pycache__/
+*.log

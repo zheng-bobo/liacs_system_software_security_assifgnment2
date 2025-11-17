@@ -1,22 +1,30 @@
 """
-GitHub 查询生成模块
+GitHub Query Generation Module
 
 阶段 4：为每个模式生成 GitHub 搜索语句（Query Generation）
+阶段 5：GitHub 搜索候选漏洞（Vulnerable Candidate Collection）
 
 为每个漏洞模式生成多条 GitHub 搜索查询，包括：
 - 基础关键字搜索
 - TF-IDF 中频危险 Tokens 查询
 - 正则表达式查询
 - 路径过滤查询
+
+并执行 GitHub Code Search API 搜索，收集候选漏洞代码。
 """
 
 import re
 import logging
+import os
+import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -444,22 +452,294 @@ class GitHubQueryGenerator:
 
         return github_queries_df
 
+    def search_github_code(
+        self,
+        github_queries_df: pd.DataFrame,
+        github_token: Optional[str] = None,
+        max_results_per_query: int = 100,
+        output_dir: Path = None,
+    ) -> pd.DataFrame:
+        """
+        阶段 5：GitHub 搜索候选漏洞（Vulnerable Candidate Collection）
 
-# 向后兼容的函数接口
-def generate_github_queries(
-    pattern_records_df: pd.DataFrame, output_dir: Path = None
-) -> pd.DataFrame:
-    """
-    阶段 4：为每个模式生成 GitHub 搜索语句（Query Generation）
+        Step 7：运行 GitHub Code Search API
 
-    向后兼容的函数接口，内部使用 GitHubQueryGenerator 类。
+        为每条查询执行 GitHub Code Search API 搜索，收集候选漏洞代码。
 
-    Args:
-        pattern_records_df: Pattern Records DataFrame
-        output_dir: 输出目录，默认 None（使用当前目录下的 output 目录）
+        Args:
+            github_queries_df: GitHub 查询 DataFrame（包含 query_id 和 github_query）
+            github_token: GitHub Personal Access Token（如果为 None，从环境变量 GITHUB_TOKEN 读取）
+            max_results_per_query: 每个查询最多返回的结果数，默认 100
+            output_dir: 输出目录，默认 None（使用当前目录下的 output 目录）
 
-    Returns:
-        包含 GitHub 查询的 DataFrame
-    """
-    generator = GitHubQueryGenerator()
-    return generator.generate(pattern_records_df, output_dir)
+        Returns:
+            包含搜索结果的 DataFrame，包含以下字段：
+            - repo: owner/repo
+            - file_path: 文件路径（如 src/app.js）
+            - fragment: 匹配代码段
+            - url: GitHub URL
+            - query_id: 查询 ID（如 p001_q01）
+            - pattern_id: 模式 ID（如 p001）
+        """
+        logger.info("\n阶段 5: GitHub 搜索候选漏洞（Vulnerable Candidate Collection）")
+        logger.info("Step 7: 运行 GitHub Code Search API...")
+
+        if output_dir is None:
+            output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+
+        # 获取 GitHub Token
+        if github_token is None:
+            github_token = os.getenv("GITHUB_TOKEN")
+            if not github_token:
+                logger.warning(
+                    "未找到 GITHUB_TOKEN 环境变量，GitHub API 调用可能失败。"
+                    "请设置环境变量或传入 github_token 参数。"
+                )
+
+        if not github_token:
+            logger.error("无法执行 GitHub 搜索：缺少 GitHub Token")
+            return pd.DataFrame()
+
+        # 创建带重试机制的 requests session
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+
+        # GitHub API 配置
+        api_base_url = "https://api.github.com"
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+        search_results = []
+        total_queries = len(github_queries_df)
+        query_count = 0
+
+        for idx, query_row in github_queries_df.iterrows():
+            query_id = query_row.get("query_id", "")
+            github_query = query_row.get("github_query", "")
+            pattern_id = query_row.get("pattern_id", "")
+
+            if not github_query:
+                continue
+
+            query_count += 1
+            logger.info(
+                f"[{query_count}/{total_queries}] 执行查询: {query_id} - {github_query[:60]}..."
+            )
+
+            try:
+                # GitHub Code Search API
+                # 注意：GitHub Code Search API 有速率限制（每分钟最多 30 次请求）
+                search_url = f"{api_base_url}/search/code"
+                params = {
+                    "q": github_query,
+                    "per_page": min(
+                        100, max_results_per_query
+                    ),  # GitHub API 每页最多 100 条
+                }
+
+                # 执行搜索
+                response = session.get(
+                    search_url, headers=headers, params=params, timeout=30
+                )
+
+                # 检查速率限制
+                if response.status_code == 403:
+                    rate_limit_remaining = response.headers.get(
+                        "X-RateLimit-Remaining", "0"
+                    )
+                    rate_limit_reset = response.headers.get("X-RateLimit-Reset", "0")
+                    if rate_limit_remaining == "0":
+                        reset_time = int(rate_limit_reset)
+                        wait_time = max(0, reset_time - int(time.time())) + 10
+                        logger.warning(
+                            f"GitHub API 速率限制，等待 {wait_time} 秒后重试..."
+                        )
+                        time.sleep(wait_time)
+                        response = session.get(
+                            search_url, headers=headers, params=params, timeout=30
+                        )
+
+                response.raise_for_status()
+                data = response.json()
+
+                # 处理搜索结果
+                items = data.get("items", [])
+                total_count = data.get("total_count", 0)
+
+                logger.info(f"  找到 {len(items)} 个结果（总计: {total_count}）")
+
+                # 限制结果数量
+                items = items[:max_results_per_query]
+
+                # 提取每个结果的信息
+                for item in items:
+                    repo_full_name = item.get("repository", {}).get("full_name", "")
+                    file_path = item.get("path", "")
+                    html_url = item.get("html_url", "")
+                    fragment = item.get("text_matches", [{}])[0].get("fragment", "")
+
+                    # 构建代码片段 URL（指向特定行）
+                    if "line" in item.get("text_matches", [{}])[0]:
+                        match_lines = item["text_matches"][0].get("matches", [])
+                        if match_lines:
+                            # 尝试获取匹配的行号
+                            match_obj = match_lines[0]
+                            if "indices" in match_obj:
+                                # 可以进一步处理以获取精确行号
+                                pass
+
+                    search_results.append(
+                        {
+                            "repo": repo_full_name,
+                            "file_path": file_path,
+                            "fragment": (
+                                fragment[:500] if fragment else ""
+                            ),  # 限制片段长度
+                            "url": html_url,
+                            "query_id": query_id,
+                            "pattern_id": pattern_id,
+                        }
+                    )
+
+                # 处理分页（如果需要更多结果）
+                # 跟踪当前查询的结果数量
+                current_query_results = len(search_results)
+                if total_count > len(items) and len(items) < max_results_per_query:
+                    page = 2
+                    while page <= 10:  # 最多 10 页
+                        # 检查当前查询的结果数量是否已达到限制
+                        current_query_count = (
+                            len(search_results) - current_query_results
+                        )
+                        if current_query_count >= max_results_per_query:
+                            break
+                        params["page"] = page
+                        response = session.get(
+                            search_url, headers=headers, params=params, timeout=30
+                        )
+
+                        if response.status_code == 403:
+                            rate_limit_remaining = response.headers.get(
+                                "X-RateLimit-Remaining", "0"
+                            )
+                            if rate_limit_remaining == "0":
+                                reset_time = int(
+                                    response.headers.get("X-RateLimit-Reset", "0")
+                                )
+                                wait_time = max(0, reset_time - int(time.time())) + 10
+                                logger.warning(
+                                    f"GitHub API 速率限制，等待 {wait_time} 秒后重试..."
+                                )
+                                time.sleep(wait_time)
+                                continue
+
+                        response.raise_for_status()
+                        page_data = response.json()
+                        page_items = page_data.get("items", [])
+
+                        if not page_items:
+                            break
+
+                        for item in page_items:
+                            # 检查当前查询的结果数量是否已达到限制
+                            current_query_count = (
+                                len(search_results) - current_query_results
+                            )
+                            if current_query_count >= max_results_per_query:
+                                break
+
+                            repo_full_name = item.get("repository", {}).get(
+                                "full_name", ""
+                            )
+                            file_path = item.get("path", "")
+                            html_url = item.get("html_url", "")
+                            fragment = item.get("text_matches", [{}])[0].get(
+                                "fragment", ""
+                            )
+
+                            search_results.append(
+                                {
+                                    "repo": repo_full_name,
+                                    "file_path": file_path,
+                                    "fragment": fragment[:500] if fragment else "",
+                                    "url": html_url,
+                                    "query_id": query_id,
+                                    "pattern_id": pattern_id,
+                                }
+                            )
+
+                        # 如果当前页没有结果或已达到限制，退出分页循环
+                        if not page_items or (
+                            len(search_results) - current_query_results
+                            >= max_results_per_query
+                        ):
+                            break
+
+                        page += 1
+
+                # 遵守 GitHub API 速率限制（每分钟最多 30 次请求）
+                # 每次请求后等待 2 秒
+                time.sleep(2)
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"查询 {query_id} 执行失败: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"处理查询 {query_id} 时出错: {e}")
+                continue
+
+        # 创建结果 DataFrame
+        search_results_df = pd.DataFrame(search_results)
+
+        # 保存搜索结果
+        if len(search_results_df) > 0:
+            results_file = output_dir / "github_search_results.csv"
+            search_results_df.to_csv(results_file, index=False, encoding="utf-8")
+            logger.info(f"\n搜索结果已保存到: {results_file}")
+            logger.info(f"总计找到 {len(search_results_df)} 个候选漏洞代码片段")
+
+            # 按查询统计
+            query_stats = (
+                search_results_df.groupby("query_id")
+                .size()
+                .reset_index(name="result_count")
+                .sort_values("result_count", ascending=False)
+            )
+
+            logger.info("\n" + "=" * 60)
+            logger.info("查询结果统计（前 10 个查询）:")
+            logger.info("=" * 60)
+            for _, stat_row in query_stats.head(10).iterrows():
+                logger.info(
+                    f"  {stat_row['query_id']}: {stat_row['result_count']} 个结果"
+                )
+
+            # 按模式统计
+            pattern_stats = (
+                search_results_df.groupby("pattern_id")
+                .size()
+                .reset_index(name="result_count")
+                .sort_values("result_count", ascending=False)
+            )
+
+            logger.info("\n" + "=" * 60)
+            logger.info("模式结果统计:")
+            logger.info("=" * 60)
+            for _, stat_row in pattern_stats.iterrows():
+                logger.info(
+                    f"  {stat_row['pattern_id']}: {stat_row['result_count']} 个结果"
+                )
+
+        else:
+            logger.warning("未找到任何搜索结果")
+
+        return search_results_df

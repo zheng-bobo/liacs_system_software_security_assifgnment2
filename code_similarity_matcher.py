@@ -357,59 +357,81 @@ class CodeSimilarityMatcher:
         if node is None:
             return None
 
-        node_type = type(node).__name__
-        result = {"type": node_type}
+        # 检查是否是 javalang AST 节点
+        if JAVALANG_AVAILABLE and isinstance(node, javalang.tree.Node):
+            node_type = type(node).__name__
+            result = {"type": node_type}
 
-        # 使用 __dict__ 获取节点的属性（javalang AST 节点通常有 __dict__）
-        if hasattr(node, "__dict__"):
-            for attr_name, attr_value in node.__dict__.items():
-                # 跳过私有属性
-                if attr_name.startswith("_"):
-                    continue
+            # 使用 __dict__ 获取节点的属性（javalang AST 节点通常有 __dict__）
+            if hasattr(node, "__dict__"):
+                for attr_name, attr_value in node.__dict__.items():
+                    # 跳过私有属性
+                    if attr_name.startswith("_"):
+                        continue
 
-                # 跳过 None 值
-                if attr_value is None:
-                    continue
+                    # 跳过 None 值
+                    if attr_value is None:
+                        continue
 
-                # 处理列表
-                if isinstance(attr_value, list):
-                    if attr_value:
-                        result[attr_name] = [
-                            (
-                                self._ast_to_json(item)
-                                if (
-                                    hasattr(item, "__dict__")
-                                    or (
-                                        JAVALANG_AVAILABLE
-                                        and isinstance(item, javalang.tree.Node)
-                                    )
-                                )
-                                else item
-                            )
-                            for item in attr_value
-                        ]
-                    else:
-                        result[attr_name] = []
-                # 处理 AST 节点（javalang.tree.Node 的子类）
-                elif (
-                    JAVALANG_AVAILABLE and isinstance(attr_value, javalang.tree.Node)
-                ) or (
-                    hasattr(attr_value, "__dict__")
-                    and not isinstance(attr_value, (str, int, float, bool))
-                ):
-                    result[attr_name] = self._ast_to_json(attr_value)
-                # 处理基本类型（字符串、数字、布尔值等）
-                elif isinstance(attr_value, (str, int, float, bool)):
-                    result[attr_name] = attr_value
-                # 其他类型（如 Position、Token 等）
-                else:
-                    # 尝试转换为字符串表示
-                    try:
-                        result[attr_name] = str(attr_value)
-                    except:
-                        pass
+                    # 递归处理属性值
+                    result[attr_name] = self._convert_value_to_json(attr_value)
 
-        return result
+            return result
+        else:
+            # 如果不是 javalang AST 节点，尝试转换为字符串
+            try:
+                return str(node)
+            except:
+                return None
+
+    def _convert_value_to_json(self, value):
+        """
+        将值转换为 JSON 可序列化的格式
+
+        Args:
+            value: 要转换的值
+
+        Returns:
+            JSON 可序列化的值
+        """
+        if value is None:
+            return None
+
+        # 处理列表
+        if isinstance(value, list):
+            return [self._convert_value_to_json(item) for item in value]
+
+        # 处理字典
+        if isinstance(value, dict):
+            return {k: self._convert_value_to_json(v) for k, v in value.items()}
+
+        # 处理 javalang AST 节点
+        if JAVALANG_AVAILABLE and isinstance(value, javalang.tree.Node):
+            return self._ast_to_json(value)
+
+        # 处理基本类型
+        if isinstance(value, (str, int, float, bool)):
+            return value
+
+        # 处理有 __dict__ 的对象（可能是其他类型的 AST 节点或对象）
+        if hasattr(value, "__dict__"):
+            try:
+                # 尝试递归转换
+                node_type = type(value).__name__
+                result = {"type": node_type}
+                for attr_name, attr_value in value.__dict__.items():
+                    if not attr_name.startswith("_") and attr_value is not None:
+                        result[attr_name] = self._convert_value_to_json(attr_value)
+                return result
+            except:
+                # 如果转换失败，转换为字符串
+                return str(value)
+
+        # 其他类型，转换为字符串
+        try:
+            return str(value)
+        except:
+            return None
 
     def extract_ast_json(self, code: str, language: str = "java") -> Optional[Dict]:
         """
