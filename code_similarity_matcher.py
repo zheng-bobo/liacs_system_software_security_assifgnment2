@@ -20,6 +20,7 @@ import logging
 from typing import Optional, List, Dict, Tuple
 from collections import Counter
 import pandas as pd
+from tqdm import tqdm
 
 # 尝试导入 javalang，如果失败则使用正则表达式方法
 try:
@@ -500,7 +501,9 @@ class CodeSimilarityMatcher:
         # 将 JSON 转换为字符串并生成哈希
         # 使用 ensure_ascii=True 避免 Unicode 编码问题，或使用 errors='replace' 处理无法编码的字符
         ast_json_str = json.dumps(ast_json, sort_keys=True, ensure_ascii=True)
-        return hashlib.sha256(ast_json_str.encode('utf-8', errors='replace')).hexdigest()[:16]
+        return hashlib.sha256(
+            ast_json_str.encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
 
     def extract_keyword_tokens(self, code: str, language: str = "java") -> set:
         """
@@ -674,48 +677,230 @@ class CodeSimilarityMatcher:
 
         return regex_pattern
 
+    def _parse_ast_optimized(
+        self, whitespace_normalized_code: str
+    ) -> Tuple[Optional[Dict], Optional[any]]:
+        """
+        优化的 AST 解析方法（接受已标准化的代码，同时返回 AST JSON 和 tree 对象）
+
+        Args:
+            whitespace_normalized_code: 已经进行空白字符标准化的代码
+
+        Returns:
+            (AST JSON 字典, tree 对象)，如果解析失败返回 (None, None)
+        """
+        if not whitespace_normalized_code or not JAVALANG_AVAILABLE:
+            return None, None
+
+        try:
+            tree = javalang.parse.parse(whitespace_normalized_code)
+        except (javalang.parser.JavaSyntaxError, javalang.tokenizer.LexerError):
+            try:
+                wrapped_code = f"class TempClass {{\n{whitespace_normalized_code}\n}}"
+                tree = javalang.parse.parse(wrapped_code)
+            except Exception:
+                return None, None
+
+        ast_json = self._ast_to_json(tree)
+        return ast_json, tree
+
+    def _extract_keyword_tokens_optimized(
+        self,
+        code: str,
+        whitespace_normalized_code: str,
+        tree: Optional[any],
+        language: str = "java",
+    ) -> set:
+        """
+        优化的关键字提取方法（可以复用 AST tree 对象）
+
+        Args:
+            code: 原始代码（用于正则表达式提取）
+            whitespace_normalized_code: 已标准化的代码（用于 AST 解析）
+            tree: 可选的 AST tree 对象（如果已解析，可以复用）
+            language: 编程语言
+
+        Returns:
+            关键字 token 集合
+        """
+        if not code:
+            return set()
+
+        # Java 关键字列表
+        java_keywords = {
+            "abstract",
+            "assert",
+            "boolean",
+            "break",
+            "byte",
+            "case",
+            "catch",
+            "char",
+            "class",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extends",
+            "final",
+            "finally",
+            "float",
+            "for",
+            "goto",
+            "if",
+            "implements",
+            "import",
+            "instanceof",
+            "int",
+            "interface",
+            "long",
+            "native",
+            "new",
+            "package",
+            "private",
+            "protected",
+            "public",
+            "return",
+            "short",
+            "static",
+            "strictfp",
+            "super",
+            "switch",
+            "synchronized",
+            "this",
+            "throw",
+            "throws",
+            "transient",
+            "try",
+            "void",
+            "volatile",
+            "while",
+        }
+
+        keywords = set()
+
+        # 提取所有标识符（包括关键字、类名、方法名等）
+        tokens = re.findall(r"\b\w+\b", code)
+
+        for token in tokens:
+            # 添加 Java 关键字
+            if token in java_keywords:
+                keywords.add(token)
+            # 添加首字母大写的标识符（可能是类名）
+            elif token and token[0].isupper() and len(token) > 1:
+                keywords.add(token)
+            # 添加常见的方法调用模式（如 getParameter, setHeader 等）
+            elif re.match(r"^[a-z][a-zA-Z]*$", token) and len(token) > 2:
+                # 过滤掉太短的标识符
+                if len(token) >= 4:
+                    keywords.add(token)
+
+        # 如果使用 AST，可以提取更准确的方法调用和类名
+        if tree and language.lower() == "java":
+            # 提取方法调用名
+            for path, node in tree.filter(javalang.tree.MethodInvocation):
+                if hasattr(node, "member") and node.member:
+                    keywords.add(node.member)
+
+            # 提取类名
+            for path, node in tree.filter(javalang.tree.ClassDeclaration):
+                if hasattr(node, "name") and node.name:
+                    keywords.add(node.name)
+
+            # 提取方法声明名
+            for path, node in tree.filter(javalang.tree.MethodDeclaration):
+                if hasattr(node, "name") and node.name:
+                    keywords.add(node.name)
+
+        return keywords
+
     def compute_all_representations(
         self, code: str, language: str = "java"
     ) -> Dict[str, any]:
         """
-        计算代码的所有表示方法
+        计算代码的所有表示方法（优化版本，复用中间计算结果）
 
         阶段 2：对漏洞代码进行规范化与结构分析（Normalization & Structural Analysis）
-
-        一个漏洞片段有多种视图：
-        Raw → Normalized → Tokens → AST → Subtree Hash → Keywords → Regex
 
         Args:
             code: 原始代码
             language: 编程语言，默认 'java'
 
         Returns:
-            包含所有表示方法的字典，包括：
-            - raw_text: Step 4.1 原始代码（Raw code）
-            - whitespace_normalized: Step 4.2 格式标准化（Whitespace normalization）
-            - normalized_text: Step 4.3 变量名标准化（Identifier Normalization）
-            - token_shingles: Step 4.4 Token 化与 Token Shingles（如 5-shingles）
-            - ast_json: Step 4.5 AST 解析 → AST JSON（基于 Raw code）
-            - ast_subtree_hash: Step 4.6 AST 子树哈希（ast_subtree_hash）
-            - keyword_tokens: Step 4.7 提取关键函数 Token（Keyword Tokens）
-            - regex_candidate: Step 4.8 自动生成正则表达式（Regex Candidate）
+            包含必需表示方法的字典：
+            - normalized_text: 变量名标准化后的代码（用于相似度计算和结果展示）
+            - token_shingles: Token shingles 列表（用于文本相似度计算）
+            - ast_subtree_hash: AST 子树哈希值（用于结构相似度计算和模式分组）
+            - keyword_tokens: 关键字 token 集合（用于相似度计算和预分组）
         """
-        return {
-            "raw_text": code,  # Step 4.1
-            "whitespace_normalized": self.extract_whitespace_normalized(
+        if not code:
+            return {
+                "normalized_text": "",
+                "token_shingles": [],
+                "ast_subtree_hash": None,
+                "keyword_tokens": set(),
+            }
+
+        try:
+            # 优化：只计算一次空白字符标准化（多个方法都需要）
+            whitespace_normalized = self.extract_whitespace_normalized(
                 code, preserve_newlines=True
-            ),  # Step 4.2
-            "normalized_text": self.extract_identifier_normalized(
-                code, language
-            ),  # Step 4.3
-            "token_shingles": self.extract_token_shingles(code, language),  # Step 4.4
-            "ast_json": self.extract_ast_json(code, language),  # Step 4.5
-            "ast_subtree_hash": self.extract_ast_subtree_hash(
-                code, language
-            ),  # Step 4.6
-            "keyword_tokens": self.extract_keyword_tokens(code, language),  # Step 4.7
-            "regex_candidate": self.extract_regex_candidate(code, language),  # Step 4.8
-        }
+            )
+
+            # 优化：只计算一次标识符归一化（normalized_text 和 token_shingles 都需要）
+            normalized_text = self._normalize_identifiers(
+                whitespace_normalized, language
+            )
+
+            # 优化：复用 normalized_text 计算 token_shingles（避免重复归一化）
+            tokens = re.findall(r"\b\w+\b|[^\w\s]", normalized_text)
+            token_shingles = []
+            for i in range(len(tokens) - self.shingle_size + 1):
+                token_shingles.append(" ".join(tokens[i : i + self.shingle_size]))
+
+            # 优化：只解析一次 AST（ast_subtree_hash 和 keyword_tokens 都需要）
+            ast_json = None
+            ast_tree = None
+            ast_subtree_hash = None
+            if language.lower() == "java" and JAVALANG_AVAILABLE:
+                try:
+                    ast_json, ast_tree = self._parse_ast_optimized(
+                        whitespace_normalized
+                    )
+                    if ast_json:
+                        ast_json_str = json.dumps(
+                            ast_json, sort_keys=True, ensure_ascii=True
+                        )
+                        ast_subtree_hash = hashlib.sha256(
+                            ast_json_str.encode("utf-8", errors="replace")
+                        ).hexdigest()[:16]
+                except Exception as e:
+                    # AST 解析失败不影响其他计算
+                    logger.debug(f"AST 解析失败: {e}")
+
+            # 优化：复用 AST tree 对象提取关键字（避免重复解析）
+            keyword_tokens = self._extract_keyword_tokens_optimized(
+                code, whitespace_normalized, ast_tree, language
+            )
+
+            return {
+                "normalized_text": normalized_text,
+                "token_shingles": token_shingles,
+                "ast_subtree_hash": ast_subtree_hash,
+                "keyword_tokens": keyword_tokens,
+            }
+        except Exception as e:
+            # 如果处理失败，返回空结果而不是抛出异常
+            logger.debug(f"处理代码时出错: {e}")
+            return {
+                "normalized_text": "",
+                "token_shingles": [],
+                "ast_subtree_hash": None,
+                "keyword_tokens": set(),
+            }
 
     def compute_similarity(
         self, repr1: Dict[str, any], repr2: Dict[str, any], method: str = "jaccard"
@@ -1051,22 +1236,74 @@ class CodeSimilarityMatcher:
 
         # 计算所有漏洞代码的表示
         representations = []
-        for idx, row in df.iterrows():
+        total_rows = len(df)
+        logger.info(f"需要处理 {total_rows} 条记录...")
+
+        # 统计信息
+        processed_count = 0
+        skipped_count = 0
+        error_count = 0
+        log_interval = max(
+            50, total_rows // 50
+        )  # 每处理 2% 或每 50 条记录一次日志（更频繁）
+
+        for idx, row in tqdm(
+            df.iterrows(), total=total_rows, desc="计算代码表示", unit="条"
+        ):
             code_before = str(row.get("code_before", ""))
             language = str(row.get("programming_language", "java")).lower()
 
-            # 只计算漏洞代码的表示（用于模式匹配）
-            repr_before = self.compute_all_representations(code_before, language)
+            # 快速跳过空代码
+            if not code_before or not code_before.strip():
+                skipped_count += 1
+                continue
 
-            representations.append(
-                {
-                    "index": idx,
-                    "repr": repr_before,  # 简化字段名
-                    "row": row,
-                    "language": language,
-                }
-            )
+            # 限制代码长度，避免处理过大的代码片段（超过 50000 字符）
+            if len(code_before) > 50000:
+                logger.warning(
+                    f"跳过过长的代码片段（索引 {idx}，长度 {len(code_before)}）"
+                )
+                skipped_count += 1
+                continue
 
+            try:
+                # 只计算漏洞代码的表示（用于模式匹配）
+                repr_before = self.compute_all_representations(code_before, language)
+
+                representations.append(
+                    {
+                        "index": idx,
+                        "repr": repr_before,  # 简化字段名
+                        "row": row,
+                        "language": language,
+                    }
+                )
+                processed_count += 1
+
+                # 定期输出进度日志（更频繁，每 50 条或 2%）
+                if processed_count % log_interval == 0:
+                    logger.info(
+                        f"已处理 {processed_count}/{total_rows} 条记录 "
+                        f"（跳过 {skipped_count} 条，错误 {error_count} 条）"
+                    )
+
+                # 每处理 10 条也输出一次（用于调试长时间运行的程序）
+                elif processed_count % 10 == 0:
+                    logger.debug(
+                        f"进度: {processed_count}/{total_rows} (跳过: {skipped_count}, 错误: {error_count})"
+                    )
+
+            except Exception as e:
+                error_count += 1
+                if error_count <= 10:  # 只记录前 10 个错误，避免日志过多
+                    logger.warning(f"处理索引 {idx} 时出错: {e}")
+                elif error_count == 11:
+                    logger.warning("后续错误将不再详细记录...")
+                continue
+
+        logger.info(
+            f"计算完成：成功处理 {processed_count} 条，跳过 {skipped_count} 条，错误 {error_count} 条"
+        )
         logger.info(f"计算了 {len(representations)} 个代码表示")
 
         # 如果使用 keyword 分组，先按 keywords 分组
@@ -1082,9 +1319,19 @@ class CodeSimilarityMatcher:
 
         logger.info("开始计算相似度...")
 
+        # 预先计算需要比较的总对数
+        total_pairs = sum(
+            len(group_indices) * (len(group_indices) - 1) // 2
+            for group_indices in keyword_groups.values()
+        )
+        logger.info(f"需要比较 {total_pairs} 对代码...")
+
         # 计算相似度矩阵
         similarity_scores = []
         compared_pairs = 0
+
+        # 使用 tqdm 显示进度
+        pbar = tqdm(total=total_pairs, desc="计算相似度", unit="对")
 
         for group_indices in keyword_groups.values():
             for i_idx, i in enumerate(group_indices):
@@ -1103,6 +1350,7 @@ class CodeSimilarityMatcher:
                         )
 
                     compared_pairs += 1
+                    pbar.update(1)
 
                     if similarity >= similarity_threshold:
                         row_i, row_j = df.iloc[i], df.iloc[j]
@@ -1118,6 +1366,7 @@ class CodeSimilarityMatcher:
                             }
                         )
 
+        pbar.close()
         logger.info(f"比较了 {compared_pairs} 对代码")
         logger.info(f"找到 {len(similarity_scores)} 对相似的漏洞模式")
 
