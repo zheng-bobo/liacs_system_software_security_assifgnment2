@@ -1,37 +1,25 @@
 #!/usr/bin/env python3
 """
-Extracting Candidate Recurring Vulnerability Code Patterns
+Code Similarity Matching Module
 
-Extract Java vulnerability code from the MoreFixes database and identify recurring repair patterns.
+Phase 2: Code Normalization & Structural Analysis
 
-Workflow:
-1. Data Filtering: Extract high-quality fix samples from the database (score >= 65, non-empty diff, exclude merge commits)
-2. Feature Engineering:
-   - Code Preprocessing: Standardize code style, normalize identifiers, unify literals
-   - AST Diff: Parse code differences and generate edit actions (INSERT/DELETE/UPDATE/MOVE)
-   - Action Abstraction: Abstract edit actions into repair action tokens (such as ADD_IF_NULLCHECK, WRAP_WITH_SANITIZER)
-   - Feature Vectorization: Use bag-of-words or TF-IDF to convert action sequences to vectors
-3. Pattern Identification: Count occurrences of identical repair patterns and identify candidate recurring vulnerabilities
-
-For details, please refer to README.md
+This module implements multi-level code similarity matching, including:
+- Code normalization (whitespace, identifiers)
+- Token Shingle generation
+- AST parsing and hashing
+- Keyword extraction
+- Regular expression generation
+- Similarity calculation and clustering
 """
 
-import os
-import sys
 import re
-from pathlib import Path
-from typing import Optional, List, Dict, Tuple
-import logging
 import hashlib
-import argparse
-from dotenv import load_dotenv
-import pandas as pd
-import sqlalchemy
-from sqlalchemy import text
-from collections import Counter
-from sklearn.feature_extraction.text import TfidfVectorizer
-import numpy as np
 import json
+import logging
+from typing import Optional, List, Dict, Tuple
+from collections import Counter
+import pandas as pd
 
 # 尝试导入 javalang，如果失败则使用正则表达式方法
 try:
@@ -43,24 +31,7 @@ try:
     JAVALANG_AVAILABLE = True
 except ImportError:
     JAVALANG_AVAILABLE = False
-    # 此时 logger 还未初始化，使用 print 或稍后在 logger 初始化后记录
 
-
-# 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent))
-
-# 加载环境变量
-load_dotenv(".env")
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("detect_recurring_vulnerabilities.log"),
-        logging.StreamHandler(),
-    ],
-)
 logger = logging.getLogger(__name__)
 
 # 如果 javalang 不可用，记录警告信息
@@ -71,49 +42,24 @@ if not JAVALANG_AVAILABLE:
     )
 
 
-class DatabaseConnector:
-    """Database connector"""
-
-    def __init__(self):
-        self.engine = None
-        self._connect()
-
-    def _connect(self):
-        """Connect to the database"""
-        try:
-            db_url = (
-                f'postgresql://{os.getenv("POSTGRES_USER")}:'
-                f'{os.getenv("POSTGRES_PASSWORD")}@'
-                f'{os.getenv("DB_HOST")}:{os.getenv("POSTGRES_PORT")}/'
-                f'{os.getenv("POSTGRES_DB")}'
-            )
-            self.engine = sqlalchemy.create_engine(db_url)
-            logger.info("Database connected successfully")
-        except Exception as e:
-            logger.error(f"Database connection failed: {e}")
-            sys.exit(1)
-
-    def execute_query(self, query: str, params: Optional[dict] = None) -> pd.DataFrame:
-        """Execute query and return DataFrame"""
-        try:
-            with self.engine.connect() as conn:
-                result = conn.execute(text(query), params or {})
-                return pd.DataFrame(result.fetchall(), columns=result.keys())
-        except Exception as e:
-            logger.error(f"Query execution failed: {e}")
-            raise
-
-
 class CodeSimilarityMatcher:
     """
     多层次代码相似性匹配类
 
-    实现5种不同的代码表示方法：
-    1. 原始文本（Raw text）
-    2. 去空格/去缩进文本（Whitespace-normalized text）
-    3. 变量名标准化（Identifier-normalized text）
-    4. Token Shingles（用于 MinHash/LSH）
-    5. AST 表示/子树哈希（AST subtree hashing）
+    阶段 2：对漏洞代码进行规范化与结构分析（Normalization & Structural Analysis）
+
+    实现8个步骤的代码表示方法：
+    1. Step 4.1 原始代码（Raw code）
+    2. Step 4.2 格式标准化（Whitespace normalization）
+    3. Step 4.3 变量名标准化（Identifier Normalization）
+    4. Step 4.4 Token 化与 Token Shingles（如 5-shingles）
+    5. Step 4.5 AST 解析 → AST JSON（基于 Raw code）
+    6. Step 4.6 AST 子树哈希（ast_subtree_hash）
+    7. Step 4.7 提取关键函数 Token（Keyword Tokens）
+    8. Step 4.8 自动生成正则表达式（Regex Candidate）
+
+    一个漏洞片段有多种视图：
+    Raw → Normalized → Tokens → AST → Subtree Hash → Keywords → Regex
     """
 
     def __init__(self, shingle_size: int = 5, use_ast: bool = False):
@@ -135,7 +81,9 @@ class CodeSimilarityMatcher:
         self, code: str, preserve_newlines: bool = False
     ) -> str:
         """
-        2. 去空格/去缩进文本：去除所有缩进，统一空格数量
+        Step 4.2 格式标准化（Whitespace normalization）
+
+        统一缩进、空格、去除多余换行。
 
         Args:
             code: 原始代码
@@ -162,7 +110,10 @@ class CodeSimilarityMatcher:
 
     def extract_identifier_normalized(self, code: str, language: str = "java") -> str:
         """
-        3. 变量名标准化：将局部变量名替换成统一占位符
+        Step 4.3 变量名标准化（Identifier Normalization）
+
+        将所有变量替换为：VAR1, VAR2, VAR3, ...
+        减少命名差异影响。
 
         先进行空白字符标准化（保留换行），再进行标识符归一化。
 
@@ -186,7 +137,9 @@ class CodeSimilarityMatcher:
 
     def extract_token_shingles(self, code: str, language: str = "java") -> List[str]:
         """
-        4. Token Shingles：将代码切分成 token，再组成固定长度的 shingles
+        Step 4.4 Token 化与 Token Shingles（如 5-shingles）
+
+        对标准化代码生成 token shingles，用于文本相似性（MinHash/LSH）。
 
         流程：原始代码 → 空白字符标准化 → 标准化变量名（VAR1, VAR2…） → Token 化 → 生成 shingles
 
@@ -458,20 +411,19 @@ class CodeSimilarityMatcher:
 
         return result
 
-    def extract_ast_subtree_hash(
-        self, code: str, language: str = "java"
-    ) -> Optional[str]:
+    def extract_ast_json(self, code: str, language: str = "java") -> Optional[Dict]:
         """
-        5. AST 子树哈希：使用 parser 生成 AST 并计算子树哈希
+        Step 4.5 AST 解析 → AST JSON（基于 Raw code）
 
-        流程：原始代码 → 空白字符标准化 → AST 解析 → AST JSON → 生成哈希
+        用真实代码构建 AST（语法树）并保存为 JSON。
+        用于语义结构分析（不受变量名、格式影响）。
 
         Args:
-            code: 原始代码
+            code: 原始代码（Raw code）
             language: 编程语言，默认 'java'
 
         Returns:
-            AST 子树哈希值，如果解析失败返回 None
+            AST JSON 字典，如果解析失败返回 None
         """
         if not code or language.lower() != "java":
             return None
@@ -479,7 +431,8 @@ class CodeSimilarityMatcher:
         if not JAVALANG_AVAILABLE:
             return None
 
-        # 先进行空白字符标准化（保留换行，但统一空格和去除缩进）
+        # 使用原始代码构建 AST（不进行变量名标准化，保留真实结构）
+        # 只进行空白字符标准化以统一格式
         normalized_code = self.extract_whitespace_normalized(
             code, preserve_newlines=True
         )
@@ -497,6 +450,30 @@ class CodeSimilarityMatcher:
 
         # 将 AST 转换为 JSON
         ast_json = self._ast_to_json(tree)
+        return ast_json
+
+    def extract_ast_subtree_hash(
+        self, code: str, language: str = "java"
+    ) -> Optional[str]:
+        """
+        Step 4.6 AST 子树哈希（ast_subtree_hash）
+
+        对 AST 子树生成结构哈希，获得"结构指纹（structural fingerprint）"。
+        用于识别结构相似漏洞。
+
+        流程：原始代码 → 空白字符标准化 → AST 解析 → AST JSON → 生成哈希
+
+        Args:
+            code: 原始代码
+            language: 编程语言，默认 'java'
+
+        Returns:
+            AST 子树哈希值，如果解析失败返回 None
+        """
+        # 复用 extract_ast_json 方法获取 AST JSON
+        ast_json = self.extract_ast_json(code, language)
+        if ast_json is None:
+            return None
 
         # 将 JSON 转换为字符串并生成哈希
         ast_json_str = json.dumps(ast_json, sort_keys=True, ensure_ascii=False)
@@ -504,20 +481,22 @@ class CodeSimilarityMatcher:
 
     def extract_keyword_tokens(self, code: str, language: str = "java") -> set:
         """
-        提取关键函数 tokens（keyword set），用于 GitHub 搜索查询
+        Step 4.7 提取关键函数 Token（Keyword Tokens）
 
-        提取的关键 tokens 包括：
-        - Java 关键字（if, for, while, try, catch, return 等）
-        - 方法调用名
-        - 类名
-        - 常见 API 调用
+        提取代表漏洞的函数、API、库名，如：
+        - path.join, process.cwd, eval, pickle.loads
+        用于 GitHub 搜索构造。
 
         Args:
             code: 原始代码
             language: 编程语言，默认 'java'
 
         Returns:
-            关键 tokens 的集合
+            关键 tokens 的集合，包括：
+            - Java 关键字（if, for, while, try, catch, return 等）
+            - 方法调用名
+            - 类名
+            - 常见 API 调用
         """
         if not code:
             return set()
@@ -625,11 +604,63 @@ class CodeSimilarityMatcher:
 
         return keywords
 
+    def extract_regex_candidate(self, code: str, language: str = "java") -> str:
+        """
+        Step 4.8 自动生成正则表达式（Regex Candidate）
+
+        用于精确匹配结构化模式。
+        基于标准化后的代码生成正则表达式候选。
+
+        Args:
+            code: 原始代码
+            language: 编程语言，默认 'java'
+
+        Returns:
+            正则表达式字符串
+        """
+        if not code:
+            return ""
+
+        # 先进行变量名标准化
+        normalized_text = self.extract_identifier_normalized(code, language)
+
+        # 将 VAR1, VAR2, FUNC1 等替换为通配符
+        placeholders = {}
+        placeholder_counter = 0
+
+        def replace_placeholder(match):
+            nonlocal placeholder_counter
+            placeholder = f"__PLACEHOLDER_{placeholder_counter}__"
+            placeholder_counter += 1
+            placeholders[placeholder] = r"(\w+)"  # 匹配标识符
+            return placeholder
+
+        # 将 VAR1, VAR2, FUNC1, CLASS1, NUM, STR 等替换为占位符
+        regex_pattern = re.sub(
+            r"\b(VAR|FUNC|CLASS|NUM|STR)\d+\b", replace_placeholder, normalized_text
+        )
+
+        # 转义特殊字符（但保留占位符）
+        # 先转义整个字符串
+        regex_pattern = re.escape(regex_pattern)
+
+        # 恢复占位符为正则表达式模式
+        for placeholder, replacement in placeholders.items():
+            escaped_placeholder = re.escape(placeholder)
+            regex_pattern = regex_pattern.replace(escaped_placeholder, replacement)
+
+        return regex_pattern
+
     def compute_all_representations(
         self, code: str, language: str = "java"
     ) -> Dict[str, any]:
         """
         计算代码的所有表示方法
+
+        阶段 2：对漏洞代码进行规范化与结构分析（Normalization & Structural Analysis）
+
+        一个漏洞片段有多种视图：
+        Raw → Normalized → Tokens → AST → Subtree Hash → Keywords → Regex
 
         Args:
             code: 原始代码
@@ -637,18 +668,30 @@ class CodeSimilarityMatcher:
 
         Returns:
             包含所有表示方法的字典，包括：
-            - raw_text: 原始代码
-            - normalized_text: 变量名标准化后的代码（用于人工检查）
-            - token_shingles: Token shingles 列表（用于文本近似代码匹配）
-            - ast_subtree_hash: AST 子树哈希值（用于结构匹配，最稳定）
-            - keyword_tokens: 关键函数 tokens（keyword set，用于基础分组和 GitHub 搜索查询）
+            - raw_text: Step 4.1 原始代码（Raw code）
+            - whitespace_normalized: Step 4.2 格式标准化（Whitespace normalization）
+            - normalized_text: Step 4.3 变量名标准化（Identifier Normalization）
+            - token_shingles: Step 4.4 Token 化与 Token Shingles（如 5-shingles）
+            - ast_json: Step 4.5 AST 解析 → AST JSON（基于 Raw code）
+            - ast_subtree_hash: Step 4.6 AST 子树哈希（ast_subtree_hash）
+            - keyword_tokens: Step 4.7 提取关键函数 Token（Keyword Tokens）
+            - regex_candidate: Step 4.8 自动生成正则表达式（Regex Candidate）
         """
         return {
-            "raw_text": code,
-            "normalized_text": self.extract_identifier_normalized(code, language),
-            "token_shingles": self.extract_token_shingles(code, language),
-            "ast_subtree_hash": self.extract_ast_subtree_hash(code, language),
-            "keyword_tokens": self.extract_keyword_tokens(code, language),
+            "raw_text": code,  # Step 4.1
+            "whitespace_normalized": self.extract_whitespace_normalized(
+                code, preserve_newlines=True
+            ),  # Step 4.2
+            "normalized_text": self.extract_identifier_normalized(
+                code, language
+            ),  # Step 4.3
+            "token_shingles": self.extract_token_shingles(code, language),  # Step 4.4
+            "ast_json": self.extract_ast_json(code, language),  # Step 4.5
+            "ast_subtree_hash": self.extract_ast_subtree_hash(
+                code, language
+            ),  # Step 4.6
+            "keyword_tokens": self.extract_keyword_tokens(code, language),  # Step 4.7
+            "regex_candidate": self.extract_regex_candidate(code, language),  # Step 4.8
         }
 
     def compute_similarity(
@@ -905,12 +948,25 @@ class CodeSimilarityMatcher:
             # 生成正则表达式
             regex_pattern = self._generate_pattern_regex(normalized_texts)
 
-            # 选择最常见的 AST hash
+            # 选择最常见的 AST hash 作为代表
             ast_hash = Counter(ast_hashes).most_common(1)[0][0] if ast_hashes else None
 
-            # 选择第一个标准化文本和代码片段作为代表
-            normalized_pattern_text = normalized_texts[0] if normalized_texts else ""
-            example_snippet = snippets[0] if snippets else ""
+            # 选择代表样本（representative pattern）
+            # 优先选择与最常见的 AST hash 对应的样本，如果没有则选择第一个
+            representative_idx = 0
+            if ast_hash:
+                # 找到与最常见 AST hash 对应的第一个样本在 group_indices 中的位置
+                for pos, idx in enumerate(group_indices):
+                    repr = representations[idx]["repr"]
+                    if repr.get("ast_subtree_hash") == ast_hash:
+                        representative_idx = pos
+                        break
+
+            # 选择代表样本的标准化文本和代码片段
+            normalized_pattern_text = (
+                normalized_texts[representative_idx] if normalized_texts else ""
+            )
+            example_snippet = snippets[representative_idx] if snippets else ""
 
             pattern_records.append(
                 {
@@ -938,21 +994,30 @@ class CodeSimilarityMatcher:
         create_patterns: bool = True,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        从 DataFrame 中找出相似的漏洞代码模式，结合多种特征
+        Step 5 — 聚类（Clustering）
+
+        结合多种特征进行漏洞模式聚类：
+        - Token Shingles (MinHash/LSH): 文本相似性
+        - AST subtree hash: 结构语义匹配
+        - Keyword tokens: 初步分组
+        - Normalized text: 人工验证
+
+        聚类结果输出：
+        → 漏洞模式（Vulnerability Patterns）
+        例如：
+        - p001：JavaScript Path Traversal（CWE-22）
+        - p002：Python eval 注入（CWE-94）
+        - p003：Insecure YAML load（CWE-20）
+
+        每个聚类选一个代表样本（representative pattern）。
 
         使用 code_before（漏洞代码）进行模式匹配，用于漏洞模式挖掘。
-
-        使用的特征：
-        - Token shingles (MinHash/LSH): 文本近似代码
-        - AST subtree hash: 结构匹配（最稳定）
-        - Keywords: 基础分组
-        - normalized_text: 人工检查
 
         Args:
             df: 包含 code_before, code_after, code_diff 的 DataFrame
             top_n: 返回前 n 个最相似的漏洞模式
             similarity_threshold: 相似度阈值，默认 0.5
-            similarity_method: 相似度计算方法，默认 'combined'
+            similarity_method: 相似度计算方法，默认 'combined'（综合多特征）
             use_keyword_grouping: 是否使用 keywords 进行预分组以提高效率，默认 True
             create_patterns: 是否创建模式记录，默认 True
 
@@ -1105,697 +1170,3 @@ class CodeSimilarityMatcher:
                 logger.info(f"创建了 {len(pattern_df)} 个模式记录")
 
         return result_df, pattern_df
-
-
-def extract_java_vulnerable_code(
-    db_connector: DatabaseConnector,
-    min_score: int = 65,
-    exclude_merge_commits: bool = True,
-    programming_languages: list = None,
-    require_diff: bool = True,
-) -> pd.DataFrame:
-    """
-    从数据库中提取指定语言的漏洞代码
-
-    Args:
-        db_connector: 数据库连接器
-        min_score: fixes.score 的最小值，默认 65 (准确率约在 95%+)
-        exclude_merge_commits: 是否排除 merge commit，默认 True
-        programming_languages: 编程语言列表，默认 ['Java']
-        require_diff: 是否要求 diff 非空，默认 True
-
-    Returns:
-        包含漏洞代码信息的 DataFrame
-    """
-    if programming_languages is None:
-        programming_languages = ["Java"]
-
-    logger.info(f"开始提取 {programming_languages} 语言的漏洞代码...")
-    logger.info(
-        f"筛选条件: min_score={min_score}, exclude_merge={exclude_merge_commits}, require_diff={require_diff}"
-    )
-
-    # 构建语言过滤条件（不区分大小写匹配）
-    # 允许传入 "java"、"JAVA"、"Java" 等不同大小写的值，都能匹配到数据库中的记录
-    lang_conditions = []
-    for i, lang in enumerate(programming_languages):
-        # 使用 LOWER() 函数进行不区分大小写匹配，使用参数化查询避免 SQL 注入
-        lang_conditions.append(f"LOWER(fc.programming_language) = LOWER(:lang_{i})")
-
-    # 准备参数
-    params = {"min_score": min_score}
-    for i, lang in enumerate(programming_languages):
-        params[f"lang_{i}"] = lang
-
-    lang_filter = " OR ".join(lang_conditions)
-
-    # 构建 WHERE 条件
-    where_conditions = []
-
-    # diff 条件
-    if require_diff:
-        where_conditions.append("COALESCE(fc.diff, '') <> ''")
-
-    # merge commit 条件
-    if exclude_merge_commits:
-        where_conditions.append("COALESCE(c.merge, FALSE) = FALSE")
-
-    # 编程语言条件（不区分大小写）
-    where_conditions.append(f"({lang_filter})")
-
-    where_clause = " AND ".join(where_conditions)
-
-    query = f"""
-    -- 取"可用于模式挖掘"的高质量修复样本
-    WITH good_fixes AS (
-      SELECT f.cve_id, f.hash, f.repo_url, f.score
-      FROM fixes f
-      WHERE f.score >= :min_score
-    )
-    SELECT
-      gf.cve_id,
-      gf.repo_url,
-      gf.hash,
-      gf.score,
-      c.author_date,
-      c.msg,
-      fc.file_change_id,
-      fc.filename,
-      fc.programming_language,
-      fc.code_before,
-      fc.code_after,
-      fc.diff
-    FROM good_fixes gf
-    JOIN commits c
-      ON c.hash = gf.hash AND c.repo_url = gf.repo_url
-    JOIN file_change fc
-      ON fc.hash = gf.hash
-    WHERE {where_clause};
-    """
-
-    df = db_connector.execute_query(query, params=params)
-
-    logger.info(f"提取了 {len(df)} 条漏洞代码记录")
-    logger.info(f"涉及 {df['cve_id'].nunique()} 个 CVE")
-    logger.info(f"涉及 {df['hash'].nunique()} 个 commit")
-    logger.info(f"涉及 {df['repo_url'].nunique()} 个仓库")
-
-    return df
-
-
-def identify_recurring_patterns(
-    df: pd.DataFrame,
-    top_n: int = 3,
-    use_code_hash: bool = True,
-) -> pd.DataFrame:
-    """
-    识别重复出现的漏洞代码模式，返回出现次数最多的 n 个模式
-
-    Args:
-        df: 包含漏洞代码的 DataFrame
-        top_n: 返回前 n 个最常见的模式，默认 3
-        use_code_hash: 是否使用代码哈希来识别重复模式，默认 True
-
-    Returns:
-        包含重复模式信息的 DataFrame，按出现次数降序排列
-    """
-    logger.info(f"开始识别重复漏洞代码模式...")
-    logger.info(f"参数: top_n={top_n}")
-
-    # 计算代码哈希
-    if use_code_hash:
-        df["code_hash"] = df["code_before"].apply(
-            lambda x: (
-                hashlib.sha256(str(x).encode("utf-8")).hexdigest()
-                if pd.notna(x) and x != ""
-                else None
-            )
-        )
-        group_key = "code_hash"
-    else:
-        # 直接使用 code_before 作为分组键
-        group_key = "code_before"
-
-    # 过滤掉空值
-    df_filtered = df[df[group_key].notna()].copy()
-
-    # 按代码模式分组，统计出现次数
-    pattern_stats = []
-    for pattern_value, group in df_filtered.groupby(group_key):
-        occurrences = len(group)
-        # 获取该模式的相关信息
-        first_row = group.iloc[0]
-        pattern_stats.append(
-            {
-                "pattern_id": (
-                    pattern_value[:16] if use_code_hash else str(pattern_value)[:50]
-                ),
-                "code_hash": (
-                    pattern_value
-                    if use_code_hash
-                    else hashlib.sha256(str(pattern_value).encode("utf-8")).hexdigest()
-                ),
-                "occurrences": occurrences,
-                "unique_cves": group["cve_id"].nunique(),
-                "unique_commits": group["hash"].nunique(),
-                "unique_repos": group["repo_url"].nunique(),
-                "unique_files": group["filename"].nunique(),
-                "programming_language": first_row["programming_language"],
-                "code_before": (
-                    first_row["code_before"][:500]
-                    if pd.notna(first_row["code_before"])
-                    else ""
-                ),  # 只保存前500字符
-                "code_after": (
-                    first_row["code_after"][:500]
-                    if pd.notna(first_row["code_after"])
-                    else ""
-                ),
-                "cve_ids": list(group["cve_id"].unique())[:10],  # 只保存前10个CVE ID
-                "repo_urls": list(group["repo_url"].unique())[:5],  # 只保存前5个仓库URL
-            }
-        )
-
-    # 转换为 DataFrame 并按出现次数排序
-    patterns_df = pd.DataFrame(pattern_stats)
-    if len(patterns_df) == 0:
-        logger.warning("未找到重复模式")
-        return pd.DataFrame()
-
-    patterns_df = patterns_df.sort_values("occurrences", ascending=False)
-
-    # 返回前 n 个
-    top_patterns = patterns_df.head(top_n).copy()
-
-    logger.info(f"识别出 {len(patterns_df)} 个代码模式")
-    logger.info(f"返回前 {len(top_patterns)} 个最常见的模式")
-
-    return top_patterns
-
-
-def process_recurring_patterns(
-    vulnerable_code_df: pd.DataFrame,
-    top_n: int = 3,
-    output_dir: Path = None,
-    similarity_method: str = "combined",
-    similarity_threshold: float = 0.5,
-    use_keyword_grouping: bool = True,
-) -> pd.DataFrame:
-    """
-    步骤2: 识别重复漏洞代码模式并保存结果
-
-    使用 CodeSimilarityMatcher 的 find_similar_fixes 方法，结合多种特征识别重复模式，
-    并返回 Pattern Record 数据。
-
-    Args:
-        vulnerable_code_df: 包含漏洞代码的 DataFrame
-        top_n: 返回前 n 个最常见的模式，默认 3
-        output_dir: 输出目录，默认 None（使用当前目录下的 output 目录）
-        similarity_method: 相似度计算方法，默认 'combined'（综合多特征）
-        similarity_threshold: 相似度阈值，默认 0.5
-        use_keyword_grouping: 是否使用 keywords 进行预分组以提高效率，默认 True
-
-    Returns:
-        包含 Pattern Record 的 DataFrame，包含以下字段：
-        - pattern_id: 模式 ID（如 p001）
-        - language: 编程语言
-        - normalized_pattern_text: 标准化模式文本
-        - keyword_tokens: 关键字 tokens 列表
-        - regex: 正则表达式模式
-        - ast_hash: AST 哈希值
-        - example_cves: 示例 CVE 列表
-        - example_snippet: 示例代码片段
-        - pattern_count: 该模式出现的次数
-    """
-    logger.info("\n步骤2: 识别重复漏洞代码模式（使用 find_similar_fixes）")
-
-    # 设置输出目录
-    if output_dir is None:
-        output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-
-    # 使用 CodeSimilarityMatcher 的 find_similar_fixes 方法
-    logger.info("使用 CodeSimilarityMatcher.find_similar_fixes 识别重复模式...")
-    matcher = CodeSimilarityMatcher(shingle_size=5, use_ast=True)
-
-    # 调用 find_similar_fixes，它会自动创建 Pattern Records
-    logger.info(
-        f"参数: similarity_method={similarity_method}, similarity_threshold={similarity_threshold}"
-    )
-    logger.info(f"use_keyword_grouping={use_keyword_grouping}, top_n={top_n}")
-
-    similar_fixes_df, pattern_records_df = matcher.find_similar_fixes(
-        vulnerable_code_df,
-        top_n=top_n * 10,  # 获取更多相似对以便生成更多模式
-        similarity_threshold=similarity_threshold,
-        similarity_method=similarity_method,
-        use_keyword_grouping=use_keyword_grouping,
-        create_patterns=True,
-    )
-
-    # 如果没有生成模式记录，返回空 DataFrame
-    if pattern_records_df.empty:
-        logger.warning("未找到重复模式，返回空结果")
-        return pd.DataFrame()
-
-    # 按 pattern_count 降序排序，选择前 top_n 个
-    pattern_records_df = pattern_records_df.sort_values(
-        "pattern_count", ascending=False
-    ).head(top_n)
-
-    logger.info(f"识别出 {len(pattern_records_df)} 个 Pattern Records")
-    logger.info(f"返回前 {len(pattern_records_df)} 个最常见的模式")
-
-    # 保存 Pattern Records
-    if len(pattern_records_df) > 0:
-        # 准备保存的数据（处理列表类型的列）
-        patterns_df_to_save = pattern_records_df.copy()
-
-        # 处理列表类型的列
-        if "keyword_tokens" in patterns_df_to_save.columns:
-            patterns_df_to_save["keyword_tokens"] = patterns_df_to_save[
-                "keyword_tokens"
-            ].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-        if "example_cves" in patterns_df_to_save.columns:
-            patterns_df_to_save["example_cves"] = patterns_df_to_save[
-                "example_cves"
-            ].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-
-        # 保存 Pattern Records
-        patterns_file = output_dir / f"pattern_records_top{top_n}.csv"
-        patterns_df_to_save.to_csv(patterns_file, index=False, encoding="utf-8")
-        logger.info(f"Pattern Records 已保存到: {patterns_file}")
-
-        # 保存相似修复对（如果存在）
-        if len(similar_fixes_df) > 0:
-            similar_fixes_file = output_dir / f"similar_fixes_top{top_n}.csv"
-            similar_fixes_df.to_csv(similar_fixes_file, index=False, encoding="utf-8")
-            logger.info(f"相似修复对已保存到: {similar_fixes_file}")
-
-        # 打印前几个 Pattern Records 的详细信息
-        logger.info("\n" + "=" * 60)
-        logger.info(f"前 {min(5, len(pattern_records_df))} 个 Pattern Records:")
-        logger.info("=" * 60)
-        for idx, (_, row) in enumerate(pattern_records_df.head(5).iterrows(), 1):
-            logger.info(f"\nPattern Record #{idx}:")
-            if "pattern_id" in row:
-                logger.info(f"  Pattern ID: {row['pattern_id']}")
-            if "pattern_count" in row:
-                logger.info(f"  出现次数: {row['pattern_count']}")
-            if "language" in row:
-                logger.info(f"  编程语言: {row['language']}")
-            if "ast_hash" in row:
-                logger.info(f"  AST Hash: {row['ast_hash']}")
-            if "keyword_tokens" in row:
-                keywords = (
-                    row["keyword_tokens"]
-                    if isinstance(row["keyword_tokens"], str)
-                    else (
-                        ", ".join(row["keyword_tokens"])
-                        if isinstance(row["keyword_tokens"], list)
-                        else ""
-                    )
-                )
-                logger.info(f"  Keywords: {keywords[:200]}...")
-            if "example_cves" in row:
-                cves = (
-                    row["example_cves"]
-                    if isinstance(row["example_cves"], str)
-                    else (
-                        ", ".join(row["example_cves"])
-                        if isinstance(row["example_cves"], list)
-                        else ""
-                    )
-                )
-                logger.info(f"  示例 CVE: {cves[:200]}...")
-            if "normalized_pattern_text" in row:
-                logger.info(
-                    f"  标准化模式文本 (前100字符): {str(row['normalized_pattern_text'])[:100]}..."
-                )
-            if "regex" in row:
-                logger.info(f"  正则表达式 (前100字符): {str(row['regex'])[:100]}...")
-            if "example_snippet" in row:
-                logger.info(
-                    f"  示例代码片段 (前100字符): {str(row['example_snippet'])[:100]}..."
-                )
-
-    return pattern_records_df
-
-
-def generate_github_queries(
-    pattern_records_df: pd.DataFrame, output_dir: Path = None
-) -> pd.DataFrame:
-    """
-    为每个 Pattern Record 生成 GitHub 搜索查询语句
-
-    对每个 pattern 生成 2-4 条 GitHub 查询，基于：
-    - keyword_tokens（最重要的）
-    - language
-    - 关键代码片段
-
-    Args:
-        pattern_records_df: Pattern Records DataFrame
-        output_dir: 输出目录，默认 None（使用当前目录下的 output 目录）
-
-    Returns:
-        包含 GitHub 查询的 DataFrame，包含以下字段：
-        - pattern_id: 模式 ID
-        - query_id: 查询 ID（每个模式有多个查询）
-        - query_type: 查询类型（keyword_basic, keyword_language, keyword_file, code_snippet）
-        - github_query: GitHub 搜索查询语句
-        - description: 查询描述
-    """
-    logger.info("\n步骤3: 生成 GitHub 搜索查询")
-
-    if output_dir is None:
-        output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-
-    # 语言到文件扩展名的映射
-    language_extensions = {
-        "java": "*.java",
-        "javascript": "*.js",
-        "typescript": "*.ts",
-        "python": "*.py",
-        "cpp": "*.cpp",
-        "c": "*.c",
-        "go": "*.go",
-        "rust": "*.rs",
-        "ruby": "*.rb",
-        "php": "*.php",
-    }
-
-    github_queries = []
-
-    for _, pattern_row in pattern_records_df.iterrows():
-        pattern_id = pattern_row.get("pattern_id", "")
-        language = pattern_row.get("language", "java").lower()
-        keyword_tokens = pattern_row.get("keyword_tokens", [])
-        normalized_text = pattern_row.get("normalized_pattern_text", "")
-        example_snippet = pattern_row.get("example_snippet", "")
-
-        # 处理 keyword_tokens（可能是字符串或列表）
-        if isinstance(keyword_tokens, str):
-            keywords = [k.strip() for k in keyword_tokens.split(",") if k.strip()]
-        elif isinstance(keyword_tokens, list):
-            keywords = [str(k).strip() for k in keyword_tokens if k.strip()]
-        else:
-            keywords = []
-
-        # 过滤掉太短或太通用的关键字
-        filtered_keywords = [
-            k
-            for k in keywords
-            if len(k) >= 3
-            and k.lower()
-            not in [
-                "if",
-                "for",
-                "while",
-                "try",
-                "catch",
-                "return",
-                "class",
-                "public",
-                "private",
-                "static",
-                "void",
-                "int",
-                "string",
-                "boolean",
-            ]
-        ]
-
-        # 如果没有足够的关键字，使用所有关键字
-        if not filtered_keywords:
-            filtered_keywords = keywords[:5]  # 最多使用5个关键字
-
-        query_counter = 0
-
-        # 查询类型1: 基础关键字查询（最重要的关键字）
-        if filtered_keywords:
-            query_counter += 1
-            # 使用前3个最重要的关键字
-            top_keywords = filtered_keywords[:3]
-            query = " ".join(f'"{kw}"' for kw in top_keywords)
-            github_queries.append(
-                {
-                    "pattern_id": pattern_id,
-                    "query_id": f"{pattern_id}_q{query_counter:02d}",
-                    "query_type": "keyword_basic",
-                    "github_query": query,
-                    "description": f"基础关键字查询: {', '.join(top_keywords)}",
-                }
-            )
-
-        # 查询类型2: 关键字 + 语言
-        if filtered_keywords and language:
-            query_counter += 1
-            top_keywords = filtered_keywords[:3]
-            keyword_part = " ".join(f'"{kw}"' for kw in top_keywords)
-            query = f"language:{language} {keyword_part}"
-            github_queries.append(
-                {
-                    "pattern_id": pattern_id,
-                    "query_id": f"{pattern_id}_q{query_counter:02d}",
-                    "query_type": "keyword_language",
-                    "github_query": query,
-                    "description": f"关键字 + 语言查询: {language}, {', '.join(top_keywords)}",
-                }
-            )
-
-        # 查询类型3: 关键字 + 文件扩展名
-        if filtered_keywords and language in language_extensions:
-            query_counter += 1
-            top_keywords = filtered_keywords[:2]  # 使用2个关键字
-            file_ext = language_extensions[language]
-            keyword_part = " ".join(f'"{kw}"' for kw in top_keywords)
-            query = f"path:{file_ext} {keyword_part}"
-            github_queries.append(
-                {
-                    "pattern_id": pattern_id,
-                    "query_id": f"{pattern_id}_q{query_counter:02d}",
-                    "query_type": "keyword_file",
-                    "github_query": query,
-                    "description": f"关键字 + 文件类型查询: {file_ext}, {', '.join(top_keywords)}",
-                }
-            )
-
-        # 查询类型4: 关键代码片段查询（如果有有意义的代码片段）
-        if example_snippet and len(example_snippet.strip()) > 20:
-            # 从代码片段中提取关键标识符（方法名、API调用等）
-            # 提取看起来像方法调用或API的标识符
-            code_keywords = re.findall(
-                r"\b[a-z][a-zA-Z0-9]*\s*\(|\b[A-Z][a-zA-Z0-9]*\.[a-z][a-zA-Z0-9]*",
-                example_snippet[:200],
-            )
-            if code_keywords:
-                query_counter += 1
-                # 选择最独特的代码片段（去除常见的方法名）
-                unique_keywords = [
-                    kw.rstrip("(").strip()
-                    for kw in code_keywords[:2]
-                    if kw.lower()
-                    not in ["if", "for", "while", "try", "catch", "return"]
-                ]
-                if unique_keywords:
-                    keyword_part = " ".join(f'"{kw}"' for kw in unique_keywords)
-                    query = f"language:{language} {keyword_part}"
-                    github_queries.append(
-                        {
-                            "pattern_id": pattern_id,
-                            "query_id": f"{pattern_id}_q{query_counter:02d}",
-                            "query_type": "code_snippet",
-                            "github_query": query,
-                            "description": f"代码片段查询: {', '.join(unique_keywords)}",
-                        }
-                    )
-
-        # 如果查询数量少于2个，添加一个组合查询
-        if query_counter < 2 and filtered_keywords:
-            query_counter += 1
-            # 使用所有关键字创建一个更宽泛的查询
-            all_keywords = filtered_keywords[:5]
-            query = " ".join(f'"{kw}"' for kw in all_keywords)
-            github_queries.append(
-                {
-                    "pattern_id": pattern_id,
-                    "query_id": f"{pattern_id}_q{query_counter:02d}",
-                    "query_type": "keyword_comprehensive",
-                    "github_query": query,
-                    "description": f"综合关键字查询: {', '.join(all_keywords)}",
-                }
-            )
-
-    github_queries_df = pd.DataFrame(github_queries)
-
-    # 保存 GitHub 查询
-    if len(github_queries_df) > 0:
-        queries_file = output_dir / "github_queries.csv"
-        github_queries_df.to_csv(queries_file, index=False, encoding="utf-8")
-        logger.info(f"GitHub 查询已保存到: {queries_file}")
-
-        # 按模式分组保存查询（便于查看）
-        queries_by_pattern = []
-        for pattern_id in github_queries_df["pattern_id"].unique():
-            pattern_queries = github_queries_df[
-                github_queries_df["pattern_id"] == pattern_id
-            ]
-            queries_by_pattern.append(
-                {
-                    "pattern_id": pattern_id,
-                    "query_count": len(pattern_queries),
-                    "queries": "\n".join(
-                        [
-                            f"  {row['query_type']}: {row['github_query']}"
-                            for _, row in pattern_queries.iterrows()
-                        ]
-                    ),
-                }
-            )
-
-        # 打印前几个模式的查询
-        logger.info("\n" + "=" * 60)
-        logger.info("GitHub 查询示例（前5个模式）:")
-        logger.info("=" * 60)
-        for pattern_info in queries_by_pattern[:5]:
-            logger.info(
-                f"\n模式 {pattern_info['pattern_id']} ({pattern_info['query_count']} 条查询):"
-            )
-            logger.info(pattern_info["queries"])
-
-    return github_queries_df
-
-
-def main(
-    top_n: int = 3,
-    min_score: int = 65,
-    exclude_merge_commits: bool = True,
-    programming_languages: List[str] = None,
-    require_diff: bool = True,
-):
-    """
-    主函数：提取候选重复漏洞代码模式
-
-    Args:
-        top_n: 返回出现次数最多的前 n 个模式，默认 3
-        min_score: fixes.score 的最小值，默认 65
-        exclude_merge_commits: 是否排除 merge commit，默认 True
-        programming_languages: 编程语言列表，默认 ['Java']
-        require_diff: 是否要求 diff 非空，默认 True
-    """
-    if programming_languages is None:
-        programming_languages = ["Java"]
-
-    logger.info("=" * 60)
-    logger.info("开始提取候选重复漏洞代码模式")
-    logger.info(f"配置: top_n={top_n}, min_score={min_score}")
-    logger.info("=" * 60)
-
-    # 初始化数据库连接
-    db_connector = DatabaseConnector()
-
-    # 步骤1: 根据条件筛选漏洞代码
-    logger.info("\n步骤1: 提取漏洞代码")
-    vulnerable_code_df = extract_java_vulnerable_code(
-        db_connector,
-        min_score=min_score,
-        exclude_merge_commits=exclude_merge_commits,
-        programming_languages=programming_languages,
-        require_diff=require_diff,
-    )
-
-    # 保存原始数据（排除 code_before 和 code_after 列，但包含 score 列）
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-
-    # 准备要保存的列：排除 code_before 和 code_after
-    columns_to_save = [
-        col
-        for col in vulnerable_code_df.columns
-        if col not in ["code_before", "code_after"]
-    ]
-    output_df = vulnerable_code_df[columns_to_save].copy()
-
-    output_file = output_dir / "extract_java_vulnerable_code.csv"
-    output_df.to_csv(output_file, index=False, encoding="utf-8")
-    logger.info(f"原始数据已保存到: {output_file}")
-
-    # 步骤2: 识别重复模式（使用 CodeSimilarityMatcher）
-    recurring_patterns_df = process_recurring_patterns(
-        vulnerable_code_df,
-        top_n=top_n,
-        output_dir=output_dir,
-        similarity_method="exact",
-    )
-
-    # 步骤3: 生成 GitHub 搜索查询
-    if len(recurring_patterns_df) > 0:
-        github_queries_df = generate_github_queries(
-            recurring_patterns_df, output_dir=output_dir
-        )
-        logger.info(
-            f"为 {len(recurring_patterns_df)} 个模式生成了 {len(github_queries_df)} 条 GitHub 查询"
-        )
-    else:
-        github_queries_df = pd.DataFrame()
-        logger.warning("未找到模式，跳过 GitHub 查询生成")
-
-    # 打印统计信息
-    logger.info("\n" + "=" * 60)
-    logger.info("统计信息:")
-    logger.info(f"  总记录数: {len(vulnerable_code_df)}")
-    logger.info(f"  唯一 CVE 数: {vulnerable_code_df['cve_id'].nunique()}")
-    logger.info(f"  唯一 commit 数: {vulnerable_code_df['hash'].nunique()}")
-    logger.info(f"  唯一仓库数: {vulnerable_code_df['repo_url'].nunique()}")
-    logger.info(f"  唯一文件数: {vulnerable_code_df['filename'].nunique()}")
-    logger.info(f"  识别出的重复模式数: {len(recurring_patterns_df)}")
-    logger.info("=" * 60)
-
-    logger.info("\n提取完成！")
-
-
-def parse_arguments():
-    """
-    解析命令行参数
-
-    Returns:
-        argparse.Namespace: 解析后的命令行参数对象
-    """
-    parser = argparse.ArgumentParser(description="提取候选重复漏洞代码模式")
-    parser.add_argument(
-        "--top-n",
-        type=int,
-        default=3,
-        help="返回出现次数最多的前 n 个模式（默认: 3）",
-    )
-    parser.add_argument(
-        "--min-score",
-        type=int,
-        default=65,
-        help="fixes.score 的最小值（默认: 65）",
-    )
-    parser.add_argument(
-        "--include-merge",
-        action="store_true",
-        help="包含 merge commit（默认: 排除）",
-    )
-    parser.add_argument(
-        "--languages",
-        nargs="+",
-        default=["java"],  # 可以使用任何大小写形式，如 "java"、"JAVA"、"Java"
-        help="编程语言列表，不区分大小写（默认: java）。例如：--languages java 或 --languages Java Go",
-    )
-
-    return parser.parse_args()
-
-
-if __name__ == "__main__":
-    args = parse_arguments()
-
-    main(
-        top_n=args.top_n,
-        min_score=args.min_score,
-        exclude_merge_commits=not args.include_merge,
-        programming_languages=args.languages,
-    )
