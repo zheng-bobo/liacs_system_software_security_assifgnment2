@@ -332,10 +332,3 @@ similar_fixes_df, pattern_records_df = matcher.find_similar_fixes(
 ============================================================
 ```
 
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-详见 [LICENSE.txt](LICENSE.txt)
