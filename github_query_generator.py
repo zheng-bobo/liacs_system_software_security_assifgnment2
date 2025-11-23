@@ -327,7 +327,7 @@ class GitHubQueryGenerator:
             if kw not in seen:
                 unique_keywords.append(kw)
                 seen.add(kw)
-        
+
         query = " AND ".join(unique_keywords) if unique_keywords else ""
         if not_keywords:
             query += " NOT " + " NOT ".join(not_keywords)
@@ -388,26 +388,32 @@ class GitHubQueryGenerator:
         if "cwe_id" not in patterns_df.columns:
             logger.warning("patterns_df missing 'cwe_id' column")
 
-        # Filter top n pattern_key per CWE if top_n is specified
+        # Filter top n pattern_key globally (not per CWE) if top_n is specified
         if top_n is not None and top_n > 0:
             if "pattern_key" not in patterns_df.columns:
-                logger.warning("patterns_df missing 'pattern_key' column, cannot filter by top n pattern_key")
-            elif "instance_count" not in patterns_df.columns:
-                logger.warning("patterns_df missing 'instance_count' column, cannot filter by top n pattern_key")
+                logger.warning(
+                    "patterns_df missing 'pattern_key' column, cannot filter by top n pattern_key"
+                )
+            elif "commit_count" not in patterns_df.columns:
+                logger.warning(
+                    "patterns_df missing 'commit_count' column, cannot filter by top n pattern_key"
+                )
             else:
-                logger.info(f"Filtering top {top_n} pattern_key per CWE...")
-                filtered_rows = []
-                for cwe_id, group in patterns_df.groupby("cwe_id"):
-                    # Sort by instance_count descending, then take top n
-                    top_patterns = group.nlargest(top_n, "instance_count")
-                    filtered_rows.append(top_patterns)
-                    logger.info(
-                        f"  CWE {cwe_id}: {len(group)} patterns -> {len(top_patterns)} patterns (top {top_n})"
-                    )
-                
-                if filtered_rows:
-                    patterns_df = pd.concat(filtered_rows, ignore_index=True)
-                    logger.info(f"Total patterns after filtering: {len(patterns_df)} (from {len(patterns_df.groupby('cwe_id'))} CWE types)")
+                original_count = len(patterns_df)
+                logger.info(
+                    f"Filtering top {top_n} pattern_key globally (across all CWE types) by commit_count..."
+                )
+                # Sort by commit_count descending, then take top n globally
+                patterns_df = patterns_df.nlargest(top_n, "commit_count")
+                logger.info(
+                    f"Total patterns after filtering: {len(patterns_df)} (from {original_count} patterns)"
+                )
+                # Log CWE distribution after filtering
+                if "cwe_id" in patterns_df.columns:
+                    cwe_counts = patterns_df.groupby("cwe_id").size()
+                    logger.info(f"CWE distribution after filtering:")
+                    for cwe_id, count in cwe_counts.items():
+                        logger.info(f"  {cwe_id}: {count} patterns")
 
         # Generate GitHub queries for each pattern
         github_queries = []
@@ -439,7 +445,20 @@ class GitHubQueryGenerator:
             else:
                 output_file = output_dir / "cwe_based_patterns.csv"
 
-            result_df.to_csv(output_file, index=False, encoding="utf-8")
+            # 排除不需要的字段（这些字段在展开的实例表中有）
+            columns_to_exclude = [
+                "representative_method_code",
+                "representative_method_code_after",
+                "all_repo_urls",
+                "all_commit_hashes",
+                "all_commit_links",
+            ]
+            columns_to_save = [
+                col for col in result_df.columns if col not in columns_to_exclude
+            ]
+            result_df[columns_to_save].to_csv(
+                output_file, index=False, encoding="utf-8"
+            )
             logger.info(
                 f"Updated pattern records file (includes GitHub queries): {output_file}"
             )
@@ -521,15 +540,15 @@ class GitHubQueryGenerator:
         result_df["github_search_results"] = results_list
         result_df["github_result_count"] = result_counts
 
-        # Save results
-        if save_results:
-            if output_dir is None:
-                output_dir = "output"
-            os.makedirs(output_dir, exist_ok=True)
-
-            output_file = os.path.join(output_dir, "github_search_results.csv")
-            result_df.to_csv(output_file, index=False, encoding="utf-8")
-            print(f"\nSearch results saved to: {output_file}")
+        # Save results (disabled - github_search_results.csv generation removed)
+        # if save_results:
+        #     if output_dir is None:
+        #         output_dir = "output"
+        #     os.makedirs(output_dir, exist_ok=True)
+        #
+        #     output_file = os.path.join(output_dir, "github_search_results.csv")
+        #     result_df.to_csv(output_file, index=False, encoding="utf-8")
+        #     print(f"\nSearch results saved to: {output_file}")
 
         total_results = sum(result_counts)
         print(f"\nSearch completed! Found {total_results} results in total")
