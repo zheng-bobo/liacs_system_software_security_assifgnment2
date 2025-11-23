@@ -113,7 +113,9 @@ with engine.connect() as conn:
         print(f"Length: {len(str(before_change)) if before_change else 0}")
 
         print("\n" + "=" * 80)
-        print("Method code extracted from file_code_before (based on start_line and end_line):")
+        print(
+            "Method code extracted from file_code_before (based on start_line and end_line):"
+        )
         print("=" * 80)
         file_code_before = row["file_code_before"]
         start_line = int(row["start_line"]) if row["start_line"] else None

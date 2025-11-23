@@ -214,7 +214,14 @@ class GitHubQueryGenerator:
                 source_keywords.append("new File")
 
         if source_keywords:
-            keywords.append(f"({' OR '.join(set(source_keywords))})")
+            # GitHub Code Search API doesn't support parentheses for grouping
+            # Use space-separated OR keywords instead
+            unique_source_keywords = list(set(source_keywords))
+            if len(unique_source_keywords) == 1:
+                keywords.append(unique_source_keywords[0])
+            else:
+                # Join with OR (GitHub API supports OR operator)
+                keywords.append(" OR ".join(unique_source_keywords))
 
         # Sink keywords (optimized based on CWE type)
         sink_keywords = []
@@ -262,11 +269,21 @@ class GitHubQueryGenerator:
                     sink_keywords.append("new File")
 
         if sink_keywords:
-            keywords.append(f"({' OR '.join(set(sink_keywords))})")
+            # GitHub Code Search API doesn't support parentheses for grouping
+            # Use space-separated OR keywords instead
+            unique_sink_keywords = list(set(sink_keywords))
+            if len(unique_sink_keywords) == 1:
+                keywords.append(unique_sink_keywords[0])
+            else:
+                # Join with OR (GitHub API supports OR operator)
+                keywords.append(" OR ".join(unique_sink_keywords))
 
         # Taint operation keywords (string concatenation)
-        if pattern.get("taint_flows"):
-            keywords.append('"+"')  # String concatenation
+        # GitHub Code Search API doesn't support quoted strings like "+"
+        # Skip adding "+" as it's not searchable and causes parsing errors
+        # The presence of source and sink keywords together already implies taint flow
+        # if pattern.get("taint_flows"):
+        #     keywords.append('"+"')  # String concatenation - removed, not supported by GitHub API
 
         # Missing Sanitizers (NOT condition) - optimized based on CWE type
         missing_sanitizers = pattern.get("missing_sanitizers", [])
@@ -359,7 +376,9 @@ class GitHubQueryGenerator:
                 output_file = output_dir / "cwe_based_patterns.csv"
 
             result_df.to_csv(output_file, index=False, encoding="utf-8")
-            logger.info(f"Updated pattern records file (includes GitHub queries): {output_file}")
+            logger.info(
+                f"Updated pattern records file (includes GitHub queries): {output_file}"
+            )
 
         return result_df
 

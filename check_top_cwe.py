@@ -38,7 +38,9 @@ def check_top_cwe(
 
     logger.info("=" * 60)
     logger.info(f"Viewing top {top_n} CWE types and names")
-    logger.info(f"Configuration: min_score={min_score}, languages={programming_languages}")
+    logger.info(
+        f"Configuration: min_score={min_score}, languages={programming_languages}"
+    )
     logger.info("=" * 60)
 
     # Initialize database connection

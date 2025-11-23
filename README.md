@@ -41,6 +41,8 @@ Extract vulnerable code from the MoreFixes database, identify recurring vulnerab
 - Python 3.8+
 - PostgreSQL database (MoreFixes database)
 - Related Python packages (see `requirements.txt`)
+- CodeQL CLI (optional, for patch validation)
+- Semgrep CLI (optional, for static analysis)
 
 ### Install Dependencies
 
@@ -159,9 +161,30 @@ Generate GitHub search queries for each identified pattern:
 
 **Output**: `output/cwe_based_patterns_top{n}.csv` (includes `github_query` column)
 
-### Step 4: GitHub API Search (Optional)
+### Step 4: GitHub Code Search (Optional)
 
-Call GitHub API for actual searching:
+There are two ways to search GitHub code:
+
+#### Option A: Using `github_code_scraper.py` (Recommended)
+
+Automated GitHub code search with TF-IDF keyword expansion:
+
+1. **Automated Search**: Uses GitHub Code Search API to find vulnerable code patterns
+2. **TF-IDF Expansion**: Automatically expands search keywords using TF-IDF from downloaded code
+3. **Recursive Search**: Supports recursive keyword expansion to find more variants
+4. **State Management**: Supports pause/resume with state saving
+5. **Code Download**: Automatically downloads code files for TF-IDF analysis
+
+**Usage**:
+```bash
+python3 github_code_scraper.py --input-file output/cwe_based_patterns_top3.csv --language java
+```
+
+**Output**: `output/github_search_results.csv`
+
+#### Option B: Using `github_query_generator.py` API
+
+Direct GitHub API search using the query generator:
 
 1. **Batch Search**: Iterate through all generated queries
 2. **Result Extraction**: Extract repository, file path, URL, and other information
@@ -176,8 +199,12 @@ Call GitHub API for actual searching:
 liacs_system_software_security/
 ├── vulnerability_pattern_miner.py       # Main program entry point
 ├── github_query_generator.py             # GitHub query generation and API call module
+├── github_code_scraper.py                # Automated GitHub code search with TF-IDF expansion
+├── extract_github_queries.py           # Extract and display GitHub queries
+├── regenerate_github_queries.py          # Regenerate GitHub queries from patterns
 ├── DATABASE_TABLES_EXPLANATION.md       # Database table structure documentation
 ├── VULNERABILITY_PATTERN_MINING.md      # Vulnerability pattern mining workflow documentation
+├── GITHUB_SEARCH_GUIDE.md               # GitHub search usage guide
 ├── requirements.txt                     # Python dependency package list
 ├── docker-compose.yml                   # Docker configuration (optional)
 └── output/                              # Output directory
@@ -206,6 +233,16 @@ GitHub query generation and API call module, includes:
 - `search_github_code()`: Search code using GitHub API
 - `search_github_with_queries()`: Batch call GitHub API for searching
 - `_make_github_request()`: Low-level API request handling (includes rate limit handling)
+- `_generate_github_search_keywords()`: Generate query strings from vulnerability patterns (GitHub API compatible syntax)
+
+#### `github_code_scraper.py`
+Automated GitHub code search with TF-IDF keyword expansion, based on DotDotDefender's recursive-scrapper.py logic:
+- `scrape_github_code()`: Main function to search GitHub code from CSV queries
+- `find_repos()`: Recursive repository search with keyword expansion
+- `search_code()`: Paginated GitHub Code Search API calls
+- `compute_tfidf()`: TF-IDF keyword extraction from downloaded code
+- `download_code_file()`: Download code files for TF-IDF analysis
+- State saving and recovery support
 
 ## 💻 Usage
 
@@ -254,7 +291,19 @@ recurring_patterns_df = query_generator.generate_github_search_keywords(
     save_file=True
 )
 
-# Call GitHub API to search (optional)
+# Option A: Use github_code_scraper.py for automated search (recommended)
+# This includes TF-IDF keyword expansion and recursive search
+import subprocess
+subprocess.run([
+    "python3", "github_code_scraper.py",
+    "--input-file", "output/cwe_based_patterns_top3.csv",
+    "--language", "java",
+    "--output-file", "output/github_search_results.csv",
+    "--min-stars", "100",
+    "--max-results-per-query", "1000"
+])
+
+# Option B: Use github_query_generator.py API directly
 if len(recurring_patterns_df) > 0:
     results_df = query_generator.search_github_with_queries(
         recurring_patterns_df,
