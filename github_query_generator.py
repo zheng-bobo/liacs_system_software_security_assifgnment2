@@ -445,7 +445,7 @@ class GitHubQueryGenerator:
             else:
                 output_file = output_dir / "cwe_based_patterns.csv"
 
-            # 排除不需要的字段（这些字段在展开的实例表中有）
+            # Exclude unnecessary fields (these fields are in the expanded instances table)
             columns_to_exclude = [
                 "representative_method_code",
                 "representative_method_code_after",

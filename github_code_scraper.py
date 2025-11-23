@@ -62,12 +62,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# GitHub API 配置
+# GitHub API Configuration
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 SEARCH_API_URL = "https://api.github.com/search/code"
 HEADERS = {"Authorization": f"Bearer {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
 PAGE_SIZE = 100
-MAX_PAGES = 10
+MAX_PAGES = 5
 
 
 def gh_url_to_raw(url: str) -> str:
@@ -125,6 +125,77 @@ def download_code_file(file_url: str, output_path: str) -> bool:
     except Exception as e:
         logger.warning(f"Error downloading {file_url}: {e}")
         return False
+
+
+def extract_matching_code_snippet(
+    file_url: str, query_terms: List[str], context_lines: int = 3
+) -> str:
+    """
+    Fetch code content and extract matching lines with context
+
+    Args:
+        file_url: Raw file URL from GitHub
+        query_terms: List of search terms to match
+        context_lines: Number of context lines before and after match
+
+    Returns:
+        Matching code snippet as string, empty string if failed
+    """
+    try:
+        response = requests.get(file_url, headers=HEADERS, timeout=30)
+        if response.status_code != 200:
+            logger.debug(f"Failed to fetch {file_url}: HTTP {response.status_code}")
+            return ""
+
+        # Try to decode as UTF-8, fallback to latin-1 if fails
+        try:
+            code_content = response.text
+        except UnicodeDecodeError:
+            code_content = response.content.decode("latin-1", errors="ignore")
+
+        if not code_content:
+            return ""
+
+        lines = code_content.split("\n")
+        matched_indices = set()
+
+        # Find lines that contain any of the query terms
+        for i, line in enumerate(lines):
+            line_lower = line.lower()
+            for term in query_terms:
+                if term.lower() in line_lower:
+                    matched_indices.add(i)
+                    break
+
+        if not matched_indices:
+            return ""
+
+        # Collect all lines to include (matched lines + context)
+        lines_to_include = set()
+        for idx in matched_indices:
+            # Add context lines before
+            start = max(0, idx - context_lines)
+            # Add context lines after
+            end = min(len(lines), idx + context_lines + 1)
+            # Add all lines in this range
+            for i in range(start, end):
+                lines_to_include.add(i)
+
+        # Extract all matching and context lines in order
+        result_lines = []
+        last_idx = -1
+        for idx in sorted(lines_to_include):
+            # Add separator if there's a gap (more than context_lines*2+1 lines apart)
+            if last_idx >= 0 and idx - last_idx > context_lines * 2 + 1:
+                result_lines.append("...")
+            result_lines.append(lines[idx])
+            last_idx = idx
+
+        return "\n".join(result_lines)
+
+    except Exception as e:
+        logger.warning(f"Error extracting code snippet from {file_url}: {e}")
+        return ""
 
 
 def tokenize_code(content: str) -> List[str]:
@@ -201,6 +272,8 @@ def search_code(
         "per_page": PAGE_SIZE,
         "page": page,
     }
+    # Note: GitHub API doesn't support text_match parameter in search/code endpoint
+    # We'll extract code snippets from the file content later
 
     try:
         response = requests.get(
@@ -568,6 +641,18 @@ def scrape_github_code(
                     if download_code_file(file_url, download_path):
                         downloaded_count += 1
 
+            # Extract matching code snippet
+            file_url = gh_url_to_raw(item["html_url"])
+            # Extract query terms (remove NOT, language: etc.)
+            query_terms = [
+                term.strip()
+                for term in query.replace("NOT", " ").replace("language:", " ").split()
+                if term.strip() and len(term.strip()) > 2
+            ]
+            code_snippet = extract_matching_code_snippet(
+                file_url, query_terms, context_lines=3
+            )
+
             # Prepare result record
             result = {
                 "pattern_key": pattern_key,
@@ -577,11 +662,12 @@ def scrape_github_code(
                 "repository": repo_name,
                 "repository_url": item["repository"]["html_url"],
                 "path": item["path"],
-                "url": item["url"],
-                "html_url": item["html_url"],
+                # "url": item["url"],
+                # "html_url": item["html_url"],
                 "sha": item.get("sha", ""),
                 "stars": stars,
-                "file_url": gh_url_to_raw(item["html_url"]),
+                "file_url": file_url,
+                "code_snippet": code_snippet,
             }
             all_results.append(result)
             found_repos[repo_name] = item
