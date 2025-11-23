@@ -66,8 +66,9 @@ logger = logging.getLogger(__name__)
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 SEARCH_API_URL = "https://api.github.com/search/code"
 HEADERS = {"Authorization": f"Bearer {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
-PAGE_SIZE = 100
-MAX_PAGES = 5
+# Default values (can be overridden by command line arguments)
+DEFAULT_PAGE_SIZE = 100
+DEFAULT_MAX_PAGES = 5
 
 
 def gh_url_to_raw(url: str) -> str:
@@ -263,13 +264,14 @@ def search_code(
     lang: str,
     page: int,
     items: List[Dict],
-    max_pages: int = MAX_PAGES,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> None:
     """Search code snippets with pagination"""
     logger.info(f"Parsing page {page}, query: {query}")
     params = {
         "q": f"language:{lang} {query}",
-        "per_page": PAGE_SIZE,
+        "per_page": page_size,
         "page": page,
     }
     # Note: GitHub API doesn't support text_match parameter in search/code endpoint
@@ -342,12 +344,12 @@ def search_code(
                 return
             logger.info("Continuing to next page...")
             time.sleep(1)  # Avoid requesting too fast
-            search_code(query, lang, page + 1, items, max_pages)
+            search_code(query, lang, page + 1, items, max_pages, page_size)
     except Exception as e:
         logger.error(f"Search error: {e}")
         logger.info("Waiting 60 seconds before retry...")
         time.sleep(60)
-        search_code(query, lang, page, items, max_pages)
+        search_code(query, lang, page, items, max_pages, page_size)
 
 
 def find_repos(
@@ -355,9 +357,10 @@ def find_repos(
     base_query: str,
     keyword_index: int,
     keywords: List[tuple],
-    max_pages: int = MAX_PAGES,
+    max_pages: int = DEFAULT_MAX_PAGES,
     max_results: int = None,
     tried_words: Set[str] = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
 ) -> List[Dict]:
     """
     Find repositories with keyword expansion support
@@ -370,6 +373,7 @@ def find_repos(
         max_pages: Maximum pages to search
         max_results: Maximum results to return (None for no limit)
         tried_words: Set of already tried keyword combinations
+        page_size: Number of results per page
 
     Returns:
         List of search result items
@@ -392,7 +396,7 @@ def find_repos(
         current_query = query_with_keyword
 
     logger.info(f"Current query: {current_query}")
-    search_code(current_query, lang, 1, items, max_pages)
+    search_code(current_query, lang, 1, items, max_pages, page_size)
 
     # Apply max_results limit
     if max_results is not None and len(items) > max_results:
@@ -404,7 +408,7 @@ def find_repos(
         return []
 
     # If results reach max pages, try adding more keywords
-    if len(items) >= (PAGE_SIZE * max_pages):
+    if len(items) >= (page_size * max_pages):
         logger.info(f"Too many results ({len(items)}), trying to add more keywords...")
         if keyword_index + 1 < len(keywords):
             # Prevent duplicate queries
@@ -420,6 +424,7 @@ def find_repos(
                     max_pages,
                     max_results,
                     tried_words,
+                    page_size,
                 )
                 # Merge results (deduplicate)
                 existing_repos = {item["repository"]["full_name"] for item in items}
@@ -481,6 +486,8 @@ def scrape_github_code(
     use_tfidf: bool = True,
     downloads_dir: str = "downloads",
     state_file: str = "scraper_state.json",
+    page_size: int = DEFAULT_PAGE_SIZE,
+    max_pages: int = DEFAULT_MAX_PAGES,
 ) -> None:
     """
     Main function: Read queries from CSV file and search GitHub code
@@ -494,6 +501,8 @@ def scrape_github_code(
         use_tfidf: Whether to use TF-IDF for keyword expansion
         downloads_dir: Directory for downloaded files
         state_file: State file path
+        page_size: Number of results per page
+        max_pages: Maximum pages to search per query
     """
     # Read CSV file
     try:
@@ -574,6 +583,7 @@ def scrape_github_code(
         logger.info(f"Processing query #{idx+1}/{len(df)}")
         logger.info(f"CWE: {cwe_id} - {cwe_name}")
         logger.info(f"Query: {query}")
+        logger.info(f"Minimum stars filter: {min_stars}")
         logger.info(f"{'='*80}")
 
         # Search code with max_results limit
@@ -582,9 +592,10 @@ def scrape_github_code(
             query,
             0,
             keywords[:10] if keywords else [],
-            MAX_PAGES,
+            max_pages,
             max_results=max_results_per_query,
             tried_words=TRIED_WORDS_SET,
+            page_size=page_size,
         )
 
         if not items:
@@ -610,7 +621,7 @@ def scrape_github_code(
             stars = repo_info.get("stargazers_count", 0)
 
             if stars < min_stars:
-                logger.debug(
+                logger.info(
                     f"Repository {repo_name} stars ({stars}) < {min_stars}, skipping"
                 )
                 continue
@@ -663,10 +674,10 @@ def scrape_github_code(
                 "repository_url": item["repository"]["html_url"],
                 "path": item["path"],
                 # "url": item["url"],
-                # "html_url": item["html_url"],
+                "html_url": item["html_url"],
                 "sha": item.get("sha", ""),
                 "stars": stars,
-                "file_url": file_url,
+                # "file_url": file_url,
                 "code_snippet": code_snippet,
             }
             all_results.append(result)
@@ -783,6 +794,18 @@ Examples:
         action="store_true",
         help="Disable TF-IDF keyword expansion",
     )
+    parser.add_argument(
+        "--page-size",
+        type=int,
+        default=DEFAULT_PAGE_SIZE,
+        help=f"Number of results per page (default: {DEFAULT_PAGE_SIZE})",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=DEFAULT_MAX_PAGES,
+        help=f"Maximum pages to search per query (default: {DEFAULT_MAX_PAGES})",
+    )
 
     args = parser.parse_args()
 
@@ -817,6 +840,8 @@ Examples:
         use_tfidf=not args.no_tfidf,
         downloads_dir=args.downloads_dir,
         state_file=args.state_file,
+        page_size=args.page_size,
+        max_pages=args.max_pages,
     )
 
 

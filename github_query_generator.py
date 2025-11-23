@@ -204,21 +204,55 @@ class GitHubQueryGenerator:
         source_keywords = []
         for source in pattern.get("sources", []):
             var = source.get("variable", "")
+            source_type = source.get("type", "")  # Use type field instead of pattern
             source_pattern = str(source.get("pattern", ""))
-            if "getParameter" in source_pattern:
+
+            # Check source_type first (more reliable)
+            if (
+                source_type == "getParameter"
+                or source_type == "getParameterValues"
+                or source_type == "getParameterMap"
+            ):
+                source_keywords.append("getParameter")
+            elif source_type == "getHeader" or source_type == "getHeaders":
+                source_keywords.append("getHeader")
+            elif source_type == "getRequestURI":
+                source_keywords.append("getRequestURI")
+            elif source_type == "getQueryString":
+                source_keywords.append("getQueryString")
+            elif source_type == "getPathInfo":
+                source_keywords.append("getPathInfo")
+            elif source_type == "getServletPath":
+                source_keywords.append("getServletPath")
+            elif source_type == "readObject":
+                source_keywords.append("readObject")
+            elif source_type == "getProperty":
+                source_keywords.append("getProperty")
+            elif source_type == "getenv":
+                source_keywords.append("getenv")
+            # Fallback to pattern matching if type is not available
+            elif "getParameter" in source_pattern:
                 source_keywords.append("getParameter")
             elif "getHeader" in source_pattern:
                 source_keywords.append("getHeader")
             elif "readObject" in source_pattern:
                 source_keywords.append("readObject")
             elif "new File" in source_pattern:
-                source_keywords.append("new File")
+                source_keywords.append("new File(")
             elif "Paths.get" in source_pattern:
                 source_keywords.append("Paths.get")
             elif "getProperty" in source_pattern:
                 source_keywords.append("getProperty")
             elif "getenv" in source_pattern:
                 source_keywords.append("getenv")
+            elif "getRequestURI" in source_pattern:
+                source_keywords.append("getRequestURI")
+            elif "getQueryString" in source_pattern:
+                source_keywords.append("getQueryString")
+            elif "getPathInfo" in source_pattern:
+                source_keywords.append("getPathInfo")
+            elif "getServletPath" in source_pattern:
+                source_keywords.append("getServletPath")
 
         if source_keywords:
             # GitHub Code Search API doesn't support parentheses for grouping
@@ -239,10 +273,12 @@ class GitHubQueryGenerator:
 
             # Add keywords based on CWE type and sink type
             if cwe_id == "CWE-79":  # XSS
-                if (
+                if sink_name == "append":
+                    sink_keywords.append("append")
+                elif (
                     "println" in sink_pattern
                     or "print" in sink_pattern
-                    or sink_name in ["println", "print", "write", "append", "getWriter"]
+                    or sink_name in ["println", "print", "write", "getWriter"]
                 ):
                     sink_keywords.append("println")
                     sink_keywords.append("response.getWriter")
@@ -254,7 +290,7 @@ class GitHubQueryGenerator:
                     "FileInputStream",
                     "FileOutputStream",
                 ]:
-                    sink_keywords.append("new File")
+                    sink_keywords.append("new File(")
                 elif (
                     "readAllBytes" in sink_pattern
                     or "readString" in sink_pattern
@@ -275,7 +311,7 @@ class GitHubQueryGenerator:
                 elif "Paths.get" in sink_pattern or sink_name == "Paths.get":
                     sink_keywords.append("Paths.get")
                 elif "File" in sink_pattern:
-                    sink_keywords.append("new File")
+                    sink_keywords.append("new File(")
                 elif "readObject" in sink_pattern:
                     sink_keywords.append("readObject")
 
@@ -350,11 +386,13 @@ class GitHubQueryGenerator:
                         if "Paths.get" in source_pattern:
                             query = "Paths.get"
                         elif "new File" in source_pattern:
-                            query = "new File"
+                            query = "new File("
                         elif "getParameter" in source_pattern:
                             query = "getParameter"
                         elif "getHeader" in source_pattern:
                             query = "getHeader"
+                        elif "getRequestURI" in source_pattern:
+                            query = "getRequestURI"
 
         return query
 
@@ -388,7 +426,7 @@ class GitHubQueryGenerator:
         if "cwe_id" not in patterns_df.columns:
             logger.warning("patterns_df missing 'cwe_id' column")
 
-        # Filter top n pattern_key globally (not per CWE) if top_n is specified
+        # Filter top pattern_key per CWE (one pattern_key per cwe_id with highest commit_count) if top_n is specified
         if top_n is not None and top_n > 0:
             if "pattern_key" not in patterns_df.columns:
                 logger.warning(
@@ -398,13 +436,19 @@ class GitHubQueryGenerator:
                 logger.warning(
                     "patterns_df missing 'commit_count' column, cannot filter by top n pattern_key"
                 )
+            elif "cwe_id" not in patterns_df.columns:
+                logger.warning(
+                    "patterns_df missing 'cwe_id' column, cannot filter by top pattern_key per CWE"
+                )
             else:
                 original_count = len(patterns_df)
-                logger.info(
-                    f"Filtering top {top_n} pattern_key globally (across all CWE types) by commit_count..."
+                logger.info(f"Filtering top 1 pattern_key per CWE (by commit_count)...")
+                # Group by cwe_id and select the pattern_key with highest commit_count for each CWE
+                patterns_df = (
+                    patterns_df.sort_values("commit_count", ascending=False)
+                    .groupby("cwe_id", as_index=False)
+                    .first()
                 )
-                # Sort by commit_count descending, then take top n globally
-                patterns_df = patterns_df.nlargest(top_n, "commit_count")
                 logger.info(
                     f"Total patterns after filtering: {len(patterns_df)} (from {original_count} patterns)"
                 )
@@ -413,7 +457,7 @@ class GitHubQueryGenerator:
                     cwe_counts = patterns_df.groupby("cwe_id").size()
                     logger.info(f"CWE distribution after filtering:")
                     for cwe_id, count in cwe_counts.items():
-                        logger.info(f"  {cwe_id}: {count} patterns")
+                        logger.info(f"  {cwe_id}: {count} pattern(s)")
 
         # Generate GitHub queries for each pattern
         github_queries = []
@@ -554,3 +598,177 @@ class GitHubQueryGenerator:
         print(f"\nSearch completed! Found {total_results} results in total")
 
         return result_df
+
+    def generate_top_github_queries_statistics(
+        self,
+        pattern_instances_file: str,
+        output_dir: Optional[Path] = None,
+        top_n: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Generate statistics for top N most common github_query from pattern_instances.csv
+
+        Groups queries by different categories:
+        1. Overall top queries (by instance count)
+        2. Top queries by CWE
+        3. Top queries by sink_types
+        4. Top queries by source_types
+
+        Args:
+            pattern_instances_file: Path to pattern_instances.csv file
+            output_dir: Output directory, default None (use output directory under current directory)
+            top_n: Number of top queries to include per category, default 10
+
+        Returns:
+            DataFrame containing top queries statistics
+        """
+        if output_dir is None:
+            output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+
+        # Load pattern instances
+        if not os.path.exists(pattern_instances_file):
+            logger.warning(
+                f"Pattern instances file not found: {pattern_instances_file}"
+            )
+            return pd.DataFrame()
+
+        df = pd.read_csv(pattern_instances_file)
+
+        if "github_query" not in df.columns:
+            logger.warning("pattern_instances.csv missing 'github_query' column")
+            return pd.DataFrame()
+
+        # Filter out empty queries
+        df = df[df["github_query"].notna() & (df["github_query"].str.strip() != "")]
+
+        if df.empty:
+            logger.warning("No valid github_query found in pattern_instances.csv")
+            return pd.DataFrame()
+
+        results = []
+
+        # 1. Overall top queries (by instance count)
+        logger.info("\nGenerating overall top queries statistics...")
+        overall_top = df["github_query"].value_counts().head(top_n)
+        for idx, (query, count) in enumerate(overall_top.items(), 1):
+            # Get sample pattern_keys using this query
+            sample_patterns = df[df["github_query"] == query]["pattern_key"].unique()[
+                :5
+            ]
+            results.append(
+                {
+                    "category": "Overall",
+                    "rank": idx,
+                    "github_query": query,
+                    "instance_count": count,
+                    "unique_pattern_keys": df[df["github_query"] == query][
+                        "pattern_key"
+                    ].nunique(),
+                    "cwe_ids": ", ".join(
+                        sorted(df[df["github_query"] == query]["cwe_id"].unique())
+                    ),
+                    "sample_pattern_keys": ", ".join(sample_patterns[:3]),
+                }
+            )
+
+        # 2. Top queries by CWE
+        logger.info("Generating top queries by CWE...")
+        if "cwe_id" in df.columns:
+            for cwe_id in df["cwe_id"].unique():
+                cwe_df = df[df["cwe_id"] == cwe_id]
+                cwe_top = cwe_df["github_query"].value_counts().head(top_n)
+                for idx, (query, count) in enumerate(cwe_top.items(), 1):
+                    sample_patterns = cwe_df[cwe_df["github_query"] == query][
+                        "pattern_key"
+                    ].unique()[:5]
+                    results.append(
+                        {
+                            "category": f"CWE-{cwe_id}",
+                            "rank": idx,
+                            "github_query": query,
+                            "instance_count": count,
+                            "unique_pattern_keys": cwe_df[
+                                cwe_df["github_query"] == query
+                            ]["pattern_key"].nunique(),
+                            "cwe_ids": cwe_id,
+                            "sample_pattern_keys": ", ".join(sample_patterns[:3]),
+                        }
+                    )
+
+        # 3. Top queries by sink_types
+        logger.info("Generating top queries by sink_types...")
+        if "sink_types" in df.columns:
+            # Get unique sink_types combinations
+            sink_combinations = df["sink_types"].value_counts().head(top_n).index
+            for sink_type in sink_combinations:
+                sink_df = df[df["sink_types"] == sink_type]
+                sink_top = sink_df["github_query"].value_counts().head(top_n)
+                for idx, (query, count) in enumerate(sink_top.items(), 1):
+                    sample_patterns = sink_df[sink_df["github_query"] == query][
+                        "pattern_key"
+                    ].unique()[:5]
+                    results.append(
+                        {
+                            "category": f"Sink-{sink_type[:50]}",  # Truncate if too long
+                            "rank": idx,
+                            "github_query": query,
+                            "instance_count": count,
+                            "unique_pattern_keys": sink_df[
+                                sink_df["github_query"] == query
+                            ]["pattern_key"].nunique(),
+                            "cwe_ids": ", ".join(
+                                sorted(
+                                    sink_df[sink_df["github_query"] == query][
+                                        "cwe_id"
+                                    ].unique()
+                                )
+                            ),
+                            "sample_pattern_keys": ", ".join(sample_patterns[:3]),
+                        }
+                    )
+
+        # 4. Top queries by source_types
+        logger.info("Generating top queries by source_types...")
+        if "source_types" in df.columns:
+            # Get unique source_types combinations
+            source_combinations = df["source_types"].value_counts().head(top_n).index
+            for source_type in source_combinations:
+                source_df = df[df["source_types"] == source_type]
+                source_top = source_df["github_query"].value_counts().head(top_n)
+                for idx, (query, count) in enumerate(source_top.items(), 1):
+                    sample_patterns = source_df[source_df["github_query"] == query][
+                        "pattern_key"
+                    ].unique()[:5]
+                    results.append(
+                        {
+                            "category": f"Source-{source_type[:50]}",  # Truncate if too long
+                            "rank": idx,
+                            "github_query": query,
+                            "instance_count": count,
+                            "unique_pattern_keys": source_df[
+                                source_df["github_query"] == query
+                            ]["pattern_key"].nunique(),
+                            "cwe_ids": ", ".join(
+                                sorted(
+                                    source_df[source_df["github_query"] == query][
+                                        "cwe_id"
+                                    ].unique()
+                                )
+                            ),
+                            "sample_pattern_keys": ", ".join(sample_patterns[:3]),
+                        }
+                    )
+
+        # Create DataFrame
+        stats_df = pd.DataFrame(results)
+
+        # Save to CSV
+        output_file = output_dir / "top_github_queries_statistics.csv"
+        stats_df.to_csv(output_file, index=False, encoding="utf-8")
+        logger.info(f"Top GitHub queries statistics saved to: {output_file}")
+        logger.info(
+            f"Generated {len(stats_df)} query statistics rows across {stats_df['category'].nunique()} categories"
+        )
+
+        return stats_df
