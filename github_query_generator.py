@@ -204,14 +204,21 @@ class GitHubQueryGenerator:
         source_keywords = []
         for source in pattern.get("sources", []):
             var = source.get("variable", "")
-            if "getParameter" in str(source.get("pattern", "")):
+            source_pattern = str(source.get("pattern", ""))
+            if "getParameter" in source_pattern:
                 source_keywords.append("getParameter")
-            elif "getHeader" in str(source.get("pattern", "")):
+            elif "getHeader" in source_pattern:
                 source_keywords.append("getHeader")
-            elif "readObject" in str(source.get("pattern", "")):
+            elif "readObject" in source_pattern:
                 source_keywords.append("readObject")
-            elif "new File" in str(source.get("pattern", "")):
+            elif "new File" in source_pattern:
                 source_keywords.append("new File")
+            elif "Paths.get" in source_pattern:
+                source_keywords.append("Paths.get")
+            elif "getProperty" in source_pattern:
+                source_keywords.append("getProperty")
+            elif "getenv" in source_pattern:
+                source_keywords.append("getenv")
 
         if source_keywords:
             # GitHub Code Search API doesn't support parentheses for grouping
@@ -265,8 +272,12 @@ class GitHubQueryGenerator:
                     sink_keywords.append("Files.readAllBytes")
                 elif "exec" in sink_pattern:
                     sink_keywords.append("Runtime.exec")
+                elif "Paths.get" in sink_pattern or sink_name == "Paths.get":
+                    sink_keywords.append("Paths.get")
                 elif "File" in sink_pattern:
                     sink_keywords.append("new File")
+                elif "readObject" in sink_pattern:
+                    sink_keywords.append("readObject")
 
         if sink_keywords:
             # GitHub Code Search API doesn't support parentheses for grouping
@@ -309,9 +320,41 @@ class GitHubQueryGenerator:
             if "normalize" in missing_sanitizers:
                 not_keywords.append("normalize")
 
-        query = " AND ".join(keywords) if keywords else ""
+        # Remove duplicate keywords (e.g., if source and sink are the same)
+        unique_keywords = []
+        seen = set()
+        for kw in keywords:
+            if kw not in seen:
+                unique_keywords.append(kw)
+                seen.add(kw)
+        
+        query = " AND ".join(unique_keywords) if unique_keywords else ""
         if not_keywords:
             query += " NOT " + " NOT ".join(not_keywords)
+
+        # If query is still empty, try to use sink_name or source pattern as fallback
+        if not query.strip():
+            # Fallback: use sink_name if available
+            sinks = pattern.get("sinks", [])
+            if sinks:
+                sink_name = sinks[0].get("sink_name", "")
+                if sink_name:
+                    query = sink_name
+            # Fallback: use source pattern if available
+            if not query.strip():
+                sources = pattern.get("sources", [])
+                if sources:
+                    source_pattern = str(sources[0].get("pattern", ""))
+                    if source_pattern:
+                        # Extract simple keyword from pattern
+                        if "Paths.get" in source_pattern:
+                            query = "Paths.get"
+                        elif "new File" in source_pattern:
+                            query = "new File"
+                        elif "getParameter" in source_pattern:
+                            query = "getParameter"
+                        elif "getHeader" in source_pattern:
+                            query = "getHeader"
 
         return query
 
@@ -328,7 +371,7 @@ class GitHubQueryGenerator:
         Args:
             patterns_df: DataFrame containing vulnerability patterns, must include 'pattern_dict' and 'cwe_id' columns
             output_dir: Output directory, default None (use output directory under current directory)
-            top_n: top_n value, used for generating filename, default None
+            top_n: top_n value, used for generating filename and filtering top n pattern_key per CWE, default None
             save_file: Whether to save file, default True
 
         Returns:
@@ -344,6 +387,27 @@ class GitHubQueryGenerator:
             logger.warning("patterns_df missing 'pattern_dict' column")
         if "cwe_id" not in patterns_df.columns:
             logger.warning("patterns_df missing 'cwe_id' column")
+
+        # Filter top n pattern_key per CWE if top_n is specified
+        if top_n is not None and top_n > 0:
+            if "pattern_key" not in patterns_df.columns:
+                logger.warning("patterns_df missing 'pattern_key' column, cannot filter by top n pattern_key")
+            elif "instance_count" not in patterns_df.columns:
+                logger.warning("patterns_df missing 'instance_count' column, cannot filter by top n pattern_key")
+            else:
+                logger.info(f"Filtering top {top_n} pattern_key per CWE...")
+                filtered_rows = []
+                for cwe_id, group in patterns_df.groupby("cwe_id"):
+                    # Sort by instance_count descending, then take top n
+                    top_patterns = group.nlargest(top_n, "instance_count")
+                    filtered_rows.append(top_patterns)
+                    logger.info(
+                        f"  CWE {cwe_id}: {len(group)} patterns -> {len(top_patterns)} patterns (top {top_n})"
+                    )
+                
+                if filtered_rows:
+                    patterns_df = pd.concat(filtered_rows, ignore_index=True)
+                    logger.info(f"Total patterns after filtering: {len(patterns_df)} (from {len(patterns_df.groupby('cwe_id'))} CWE types)")
 
         # Generate GitHub queries for each pattern
         github_queries = []
