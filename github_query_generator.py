@@ -1,7 +1,7 @@
 """
-GitHub 查询生成模块
+GitHub Query Generation Module
 
-根据漏洞模式生成 GitHub 搜索查询关键词，并调用 GitHub API 进行搜索。
+Generate GitHub search query keywords based on vulnerability patterns and call GitHub API for searching.
 """
 
 import os
@@ -13,21 +13,21 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
-# 加载环境变量
+# Load environment variables
 load_dotenv(".env")
 
 logger = logging.getLogger(__name__)
 
 
 class GitHubQueryGenerator:
-    """GitHub 查询生成器类"""
+    """GitHub Query Generator Class"""
 
     def __init__(self, github_token: Optional[str] = None):
         """
-        初始化 GitHub 查询生成器
+        Initialize GitHub Query Generator
 
         Args:
-            github_token: GitHub Personal Access Token，如果为 None 则从环境变量 GITHUB_TOKEN 读取
+            github_token: GitHub Personal Access Token, if None then read from environment variable GITHUB_TOKEN
         """
         self.github_token = github_token or os.getenv("GITHUB_TOKEN")
         self.api_base_url = "https://api.github.com"
@@ -38,15 +38,15 @@ class GitHubQueryGenerator:
         self, endpoint: str, params: Optional[Dict] = None, max_retries: int = 3
     ) -> Optional[Dict]:
         """
-        发送 GitHub API 请求
+        Send GitHub API request
 
         Args:
-            endpoint: API 端点（相对于 base URL）
-            params: 请求参数
-            max_retries: 最大重试次数
+            endpoint: API endpoint (relative to base URL)
+            params: Request parameters
+            max_retries: Maximum number of retries
 
         Returns:
-            API 响应 JSON 字典，如果失败返回 None
+            API response JSON dictionary, returns None if failed
         """
         url = f"{self.api_base_url}/{endpoint.lstrip('/')}"
         headers = {
@@ -60,7 +60,7 @@ class GitHubQueryGenerator:
             try:
                 response = requests.get(url, headers=headers, params=params, timeout=30)
 
-                # 更新 rate limit 信息
+                # Update rate limit information
                 self.rate_limit_remaining = int(
                     response.headers.get("X-RateLimit-Remaining", 0)
                 )
@@ -68,7 +68,7 @@ class GitHubQueryGenerator:
                     response.headers.get("X-RateLimit-Reset", 0)
                 )
 
-                # 处理 rate limit
+                # Handle rate limit
                 if response.status_code == 403 and self.rate_limit_remaining == 0:
                     reset_time = self.rate_limit_reset
                     wait_time = max(0, reset_time - int(time.time())) + 1
@@ -78,16 +78,16 @@ class GitHubQueryGenerator:
                     time.sleep(wait_time)
                     continue
 
-                # 处理其他错误
+                # Handle other errors
                 if response.status_code != 200:
                     print(
                         f"GitHub API error: {response.status_code} - {response.text[:200]}"
                     )
                     if response.status_code == 422:
-                        # 422 Unprocessable Entity - 通常是查询语法错误
+                        # 422 Unprocessable Entity - usually query syntax error
                         return None
                     if attempt < max_retries - 1:
-                        time.sleep(2**attempt)  # 指数退避
+                        time.sleep(2**attempt)  # Exponential backoff
                         continue
                     return None
 
@@ -110,21 +110,21 @@ class GitHubQueryGenerator:
         max_results: int = 100,
     ) -> List[Dict]:
         """
-        使用 GitHub API 搜索代码
+        Search code using GitHub API
 
         Args:
-            query: GitHub 搜索查询字符串
-            language: 编程语言过滤，默认 'java'
-            per_page: 每页结果数（最大 100）
-            max_results: 最大返回结果数
+            query: GitHub search query string
+            language: Programming language filter, default 'java'
+            per_page: Number of results per page (max 100)
+            max_results: Maximum number of results to return
 
         Returns:
-            搜索结果列表，每个结果包含：repository, path, url, html_url 等信息
+            List of search results, each result contains: repository, path, url, html_url, etc.
         """
         if not query or not query.strip():
             return []
 
-        # 构建搜索查询（添加语言过滤）
+        # Build search query (add language filter)
         search_query = query
         if language:
             search_query = f"{query} language:{language}"
@@ -133,7 +133,7 @@ class GitHubQueryGenerator:
         page = 1
 
         while len(results) < max_results:
-            # 检查 rate limit
+            # Check rate limit
             if self.rate_limit_remaining is not None and self.rate_limit_remaining <= 0:
                 reset_time = self.rate_limit_reset
                 wait_time = max(0, reset_time - int(time.time())) + 1
@@ -155,7 +155,7 @@ class GitHubQueryGenerator:
             if not items:
                 break
 
-            # 提取需要的信息
+            # Extract required information
             for item in items:
                 results.append(
                     {
@@ -173,13 +173,13 @@ class GitHubQueryGenerator:
                 if len(results) >= max_results:
                     break
 
-            # 检查是否还有更多页面
+            # Check if there are more pages
             total_count = response_data.get("total_count", 0)
             if len(results) >= total_count or len(items) < per_page:
                 break
 
             page += 1
-            time.sleep(1)  # 避免请求过快
+            time.sleep(1)  # Avoid requesting too fast
 
         return results
 
@@ -189,18 +189,18 @@ class GitHubQueryGenerator:
         cwe_id: str,
     ) -> str:
         """
-        步骤2.7: 生成 GitHub 搜索关键词
+        Step 2.7: Generate GitHub search keywords
 
         Args:
-            pattern: 漏洞模式字典
-            cwe_id: CWE 编号
+            pattern: Vulnerability pattern dictionary
+            cwe_id: CWE ID
 
         Returns:
-            GitHub 搜索查询字符串
+            GitHub search query string
         """
         keywords = []
 
-        # Source 关键词
+        # Source keywords
         source_keywords = []
         for source in pattern.get("sources", []):
             var = source.get("variable", "")
@@ -216,14 +216,14 @@ class GitHubQueryGenerator:
         if source_keywords:
             keywords.append(f"({' OR '.join(set(source_keywords))})")
 
-        # Sink 关键词（根据 CWE 类型优化）
+        # Sink keywords (optimized based on CWE type)
         sink_keywords = []
         for sink in pattern.get("sinks", []):
             sink_pattern = str(sink.get("pattern", ""))
             sink_name = sink.get("sink_name", "")
             vuln_type = sink.get("vuln_type", "")
 
-            # 根据 CWE 类型和 sink 类型添加关键词
+            # Add keywords based on CWE type and sink type
             if cwe_id == "CWE-79":  # XSS
                 if (
                     "println" in sink_pattern
@@ -249,7 +249,7 @@ class GitHubQueryGenerator:
                     sink_keywords.append("Files.readAllBytes")
                 elif "Paths.get" in sink_pattern or sink_name == "Paths.get":
                     sink_keywords.append("Paths.get")
-            else:  # 通用模式
+            else:  # Generic pattern
                 if "execute" in sink_pattern:
                     sink_keywords.append("Statement.execute")
                 elif "println" in sink_pattern or "print" in sink_pattern:
@@ -264,27 +264,27 @@ class GitHubQueryGenerator:
         if sink_keywords:
             keywords.append(f"({' OR '.join(set(sink_keywords))})")
 
-        # Taint 操作关键词（字符串拼接）
+        # Taint operation keywords (string concatenation)
         if pattern.get("taint_flows"):
-            keywords.append('"+"')  # 字符串拼接
+            keywords.append('"+"')  # String concatenation
 
-        # Missing Sanitizers（NOT 条件）- 根据 CWE 类型优化
+        # Missing Sanitizers (NOT condition) - optimized based on CWE type
         missing_sanitizers = pattern.get("missing_sanitizers", [])
         not_keywords = []
 
-        if cwe_id == "CWE-79":  # XSS - 重点关注 HTML 转义
+        if cwe_id == "CWE-79":  # XSS - focus on HTML escaping
             if "escapeHtml" in missing_sanitizers:
                 not_keywords.append("escapeHtml")
                 not_keywords.append("StringEscapeUtils")
                 not_keywords.append("ESAPI")
-        elif cwe_id == "CWE-22":  # Path Traversal - 重点关注路径规范化
+        elif cwe_id == "CWE-22":  # Path Traversal - focus on path normalization
             if "normalize" in missing_sanitizers:
                 not_keywords.append("normalize")
                 not_keywords.append("getCanonicalPath")
             if "pathValidation" in missing_sanitizers:
                 not_keywords.append("isValidPath")
                 not_keywords.append("PathValidator")
-        else:  # 通用模式
+        else:  # Generic pattern
             if "PreparedStatement" in missing_sanitizers:
                 not_keywords.append("PreparedStatement")
             if "escapeHtml" in missing_sanitizers:
@@ -306,29 +306,29 @@ class GitHubQueryGenerator:
         save_file: bool = True,
     ) -> pd.DataFrame:
         """
-        为 DataFrame 中的每个模式生成 GitHub 搜索查询
+        Generate GitHub search queries for each pattern in DataFrame
 
         Args:
-            patterns_df: 包含漏洞模式的 DataFrame，必须包含 'pattern_dict' 和 'cwe_id' 列
-            output_dir: 输出目录，默认 None（使用当前目录下的 output 目录）
-            top_n: top_n 值，用于生成文件名，默认 None
-            save_file: 是否保存文件，默认 True
+            patterns_df: DataFrame containing vulnerability patterns, must include 'pattern_dict' and 'cwe_id' columns
+            output_dir: Output directory, default None (use output directory under current directory)
+            top_n: top_n value, used for generating filename, default None
+            save_file: Whether to save file, default True
 
         Returns:
-            更新后的 DataFrame，包含 'github_query' 列，并删除 'pattern_dict' 列
+            Updated DataFrame containing 'github_query' column, and 'pattern_dict' column is removed
         """
-        # 检查 DataFrame 是否为空
+        # Check if DataFrame is empty
         if patterns_df.empty:
-            logger.warning("patterns_df 为空，无法生成 GitHub 查询")
+            logger.warning("patterns_df is empty, cannot generate GitHub queries")
             return patterns_df
 
-        # 检查必需的列是否存在
+        # Check if required columns exist
         if "pattern_dict" not in patterns_df.columns:
-            logger.warning("patterns_df 缺少 'pattern_dict' 列")
+            logger.warning("patterns_df missing 'pattern_dict' column")
         if "cwe_id" not in patterns_df.columns:
-            logger.warning("patterns_df 缺少 'cwe_id' 列")
+            logger.warning("patterns_df missing 'cwe_id' column")
 
-        # 为每个模式生成 GitHub 查询
+        # Generate GitHub queries for each pattern
         github_queries = []
         for _, row in patterns_df.iterrows():
             pattern_dict = row.get("pattern_dict")
@@ -339,15 +339,15 @@ class GitHubQueryGenerator:
             else:
                 github_queries.append("")
 
-        # 添加 github_query 列
+        # Add github_query column
         result_df = patterns_df.copy()
         result_df["github_query"] = github_queries
 
-        # 删除临时的 pattern_dict 列（如果存在）
+        # Remove temporary pattern_dict column (if exists)
         if "pattern_dict" in result_df.columns:
             result_df = result_df.drop(columns=["pattern_dict"])
 
-        # 保存文件
+        # Save file
         if save_file:
             if output_dir is None:
                 output_dir = Path("output")
@@ -359,7 +359,7 @@ class GitHubQueryGenerator:
                 output_file = output_dir / "cwe_based_patterns.csv"
 
             result_df.to_csv(output_file, index=False, encoding="utf-8")
-            logger.info(f"已更新模式记录文件（包含 GitHub 查询）: {output_file}")
+            logger.info(f"Updated pattern records file (includes GitHub queries): {output_file}")
 
         return result_df
 
@@ -372,19 +372,19 @@ class GitHubQueryGenerator:
         output_dir: Optional[str] = None,
     ) -> pd.DataFrame:
         """
-        使用生成的 GitHub 查询调用 GitHub API 进行搜索
+        Use generated GitHub queries to call GitHub API for searching
 
         Args:
-            patterns_df: 包含 'github_query' 列的 DataFrame
-            language: 编程语言过滤，默认 'java'
-            max_results_per_query: 每个查询的最大结果数
-            save_results: 是否保存搜索结果到文件
-            output_dir: 输出目录，默认 None（使用当前目录）
+            patterns_df: DataFrame containing 'github_query' column
+            language: Programming language filter, default 'java'
+            max_results_per_query: Maximum number of results per query
+            save_results: Whether to save search results to file
+            output_dir: Output directory, default None (use current directory)
 
         Returns:
-            包含搜索结果的 DataFrame，新增列：
-            - github_search_results: 搜索结果列表（JSON 字符串）
-            - github_result_count: 结果数量
+            DataFrame containing search results, new columns:
+            - github_search_results: List of search results (JSON string)
+            - github_result_count: Number of results
         """
         if "github_query" not in patterns_df.columns:
             raise ValueError("DataFrame must contain 'github_query' column")
@@ -393,7 +393,7 @@ class GitHubQueryGenerator:
         result_counts = []
 
         total_queries = len(patterns_df)
-        print(f"\n开始调用 GitHub API 搜索 {total_queries} 个查询...")
+        print(f"\nStarting to call GitHub API to search {total_queries} queries...")
 
         for idx, row in patterns_df.iterrows():
             query = row.get("github_query", "")
@@ -401,7 +401,7 @@ class GitHubQueryGenerator:
             cve_id = row.get("cve_id", "")
 
             print(
-                f"\n[{idx + 1}/{total_queries}] 搜索查询: {query[:100]}..."
+                f"\n[{idx + 1}/{total_queries}] Searching query: {query[:100]}..."
                 f" (CWE: {cwe_id}, CVE: {cve_id})"
             )
 
@@ -410,35 +410,35 @@ class GitHubQueryGenerator:
                 result_counts.append(0)
                 continue
 
-            # 调用 GitHub API 搜索
+            # Call GitHub API to search
             search_results = self.search_github_code(
                 query=query,
                 language=language,
                 max_results=max_results_per_query,
             )
 
-            # 保存结果
+            # Save results
             import json
 
             results_json = json.dumps(search_results, ensure_ascii=False)
             results_list.append(results_json)
             result_counts.append(len(search_results))
 
-            print(f"  找到 {len(search_results)} 个结果")
+            print(f"  Found {len(search_results)} results")
 
-            # 显示 rate limit 信息
+            # Display rate limit information
             if self.rate_limit_remaining is not None:
                 print(f"  Rate limit remaining: {self.rate_limit_remaining}")
 
-            # 避免请求过快
+            # Avoid requesting too fast
             time.sleep(1)
 
-        # 添加结果列
+        # Add result columns
         result_df = patterns_df.copy()
         result_df["github_search_results"] = results_list
         result_df["github_result_count"] = result_counts
 
-        # 保存结果
+        # Save results
         if save_results:
             if output_dir is None:
                 output_dir = "output"
@@ -446,9 +446,9 @@ class GitHubQueryGenerator:
 
             output_file = os.path.join(output_dir, "github_search_results.csv")
             result_df.to_csv(output_file, index=False, encoding="utf-8")
-            print(f"\n搜索结果已保存到: {output_file}")
+            print(f"\nSearch results saved to: {output_file}")
 
         total_results = sum(result_counts)
-        print(f"\n搜索完成！总共找到 {total_results} 个结果")
+        print(f"\nSearch completed! Found {total_results} results in total")
 
         return result_df

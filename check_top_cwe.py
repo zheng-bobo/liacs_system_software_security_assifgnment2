@@ -1,5 +1,5 @@
 """
-查看 top 3 CWE 类型和名称的脚本
+Script to view top 3 CWE types and names
 """
 
 import sys
@@ -10,10 +10,10 @@ from vulnerability_pattern_miner import DatabaseConnector
 import pandas as pd
 from sqlalchemy import text
 
-# 加载环境变量
+# Load environment variables
 load_dotenv(".env")
 
-# 配置日志
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -26,25 +26,25 @@ def check_top_cwe(
     top_n: int = 3, min_score: int = 65, programming_languages: list = None
 ):
     """
-    查看 top n 的 CWE 类型和名称
+    View top n CWE types and names
 
     Args:
-        top_n: 返回前 n 个最常见的 CWE，默认 3
-        min_score: fixes.score 的最小值，默认 65
-        programming_languages: 编程语言列表，默认 ['Java']
+        top_n: Return top n most common CWE, default 3
+        min_score: Minimum value of fixes.score, default 65
+        programming_languages: List of programming languages, default ['Java']
     """
     if programming_languages is None:
         programming_languages = ["Java"]
 
     logger.info("=" * 60)
-    logger.info(f"查看 top {top_n} 的 CWE 类型和名称")
-    logger.info(f"配置: min_score={min_score}, languages={programming_languages}")
+    logger.info(f"Viewing top {top_n} CWE types and names")
+    logger.info(f"Configuration: min_score={min_score}, languages={programming_languages}")
     logger.info("=" * 60)
 
-    # 初始化数据库连接
+    # Initialize database connection
     db_connector = DatabaseConnector()
 
-    # 构建语言过滤条件
+    # Build language filter conditions
     lang_conditions = []
     params = {"min_score": min_score, "top_n": top_n}
     for i, lang in enumerate(programming_languages):
@@ -53,8 +53,8 @@ def check_top_cwe(
 
     lang_filter = " OR ".join(lang_conditions)
 
-    # 优化后的 SQL：直接在数据库中完成 CWE 统计，避免传输大量数据
-    logger.info("\n执行优化后的 SQL 查询...")
+    # Optimized SQL: Complete CWE statistics directly in database to avoid transferring large amounts of data
+    logger.info("\nExecuting optimized SQL query...")
     query = f"""
     WITH good_fixes AS (
       SELECT DISTINCT f.cve_id, f.hash, f.repo_url
@@ -102,8 +102,8 @@ def check_top_cwe(
     try:
         top_cwe_df = db_connector.execute_query(query, params=params)
     except Exception as e:
-        # 如果 array_agg 不支持，使用简化版本
-        logger.warning(f"使用 array_agg 失败，尝试简化查询: {e}")
+        # If array_agg is not supported, use simplified version
+        logger.warning(f"Failed to use array_agg, trying simplified query: {e}")
         query_simple = f"""
         WITH good_fixes AS (
           SELECT DISTINCT f.cve_id, f.hash, f.repo_url
@@ -147,9 +147,9 @@ def check_top_cwe(
         """
         top_cwe_df = db_connector.execute_query(query_simple, params=params)
 
-        # 如果没有 cve_list 列，需要单独查询
+        # If cve_list column doesn't exist, need to query separately
         if "cve_list" not in top_cwe_df.columns:
-            logger.info("获取每个 CWE 的 CVE 示例...")
+            logger.info("Getting CVE examples for each CWE...")
             for idx, row in top_cwe_df.iterrows():
                 cve_query = f"""
                 SELECT DISTINCT sff.cve_id
@@ -179,25 +179,25 @@ def check_top_cwe(
                 )
 
     if top_cwe_df.empty:
-        logger.warning("未找到符合条件的 CWE")
+        logger.warning("No matching CWE found")
         return
 
-    logger.info(f"查询完成，找到 {len(top_cwe_df)} 个 top CWE")
+    logger.info(f"Query completed, found {len(top_cwe_df)} top CWE")
 
-    # 处理 cve_list 列，转换为字符串格式便于保存
+    # Process cve_list column, convert to string format for easier saving
     if "cve_list" in top_cwe_df.columns:
 
         def format_cve_list(cve_list):
             try:
-                # 处理 None
+                # Handle None
                 if cve_list is None:
                     return ""
 
-                # 处理列表类型
+                # Handle list type
                 if isinstance(cve_list, list):
-                    return ", ".join(str(c) for c in cve_list[:10])  # 最多显示10个
+                    return ", ".join(str(c) for c in cve_list[:10])  # Show at most 10
 
-                # 处理 numpy 数组或其他数组类型
+                # Handle numpy arrays or other array types
                 if hasattr(cve_list, "__iter__") and not isinstance(cve_list, str):
                     try:
                         cve_list = list(cve_list)
@@ -205,51 +205,51 @@ def check_top_cwe(
                     except (TypeError, ValueError):
                         pass
 
-                # 尝试检查是否为 NaN（避免数组类型的歧义错误）
+                # Try to check if it's NaN (avoid ambiguity errors with array types)
                 try:
                     if pd.isna(cve_list):
                         return ""
                 except (ValueError, TypeError):
-                    pass  # 如果是数组类型，pd.isna 可能失败，继续处理
+                    pass  # If it's an array type, pd.isna may fail, continue processing
 
-                # PostgreSQL array 格式（字符串形式）
+                # PostgreSQL array format (string form)
                 cve_str = str(cve_list)
                 if cve_str.startswith("{") and cve_str.endswith("}"):
-                    cve_str = cve_str[1:-1]  # 移除花括号
+                    cve_str = cve_str[1:-1]  # Remove curly braces
                 cves = [c.strip() for c in cve_str.split(",") if c.strip()]
                 return ", ".join(cves[:10])
             except Exception as e:
-                # 如果所有方法都失败，返回字符串表示
-                return str(cve_list)[:100]  # 限制长度
+                # If all methods fail, return string representation
+                return str(cve_list)[:100]  # Limit length
 
         top_cwe_df["cve_examples"] = top_cwe_df["cve_list"].apply(format_cve_list)
-        # 删除原始的 cve_list 列（可能是数组类型，不便于保存）
+        # Remove original cve_list column (may be array type, not convenient to save)
         top_cwe_df = top_cwe_df.drop(columns=["cve_list"])
 
-    # 显示结果
+    # Display results
     logger.info("\n" + "=" * 60)
-    logger.info(f"Top {len(top_cwe_df)} CWE 类型和名称:")
+    logger.info(f"Top {len(top_cwe_df)} CWE types and names:")
     logger.info("=" * 60)
 
     for idx, (_, row) in enumerate(top_cwe_df.iterrows(), 1):
         logger.info(f"\n#{idx} {row['cwe_id']}: {row['cwe_name']}")
-        logger.info(f"   出现次数: {row['fix_count']} 个 CVE")
+        logger.info(f"   Occurrence count: {row['fix_count']} CVEs")
 
         if "cve_examples" in row and row["cve_examples"]:
-            logger.info(f"   示例 CVE: {row['cve_examples']}")
+            logger.info(f"   Example CVEs: {row['cve_examples']}")
         else:
-            logger.info(f"   示例 CVE: (未获取)")
+            logger.info(f"   Example CVEs: (not retrieved)")
 
-    # 保存结果到 CSV 文件
+    # Save results to CSV file
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
     output_file = output_dir / f"top_{top_n}_cwe.csv"
 
-    # 重新排列列的顺序，使其更易读
+    # Rearrange column order for better readability
     columns_order = ["cwe_id", "cwe_name", "fix_count"]
     if "cve_examples" in top_cwe_df.columns:
         columns_order.append("cve_examples")
-    # 添加其他可能存在的列
+    # Add other columns that may exist
     for col in top_cwe_df.columns:
         if col not in columns_order:
             columns_order.append(col)
@@ -260,8 +260,8 @@ def check_top_cwe(
     top_cwe_df_output.to_csv(output_file, index=False, encoding="utf-8")
 
     logger.info("\n" + "=" * 60)
-    logger.info(f"结果已保存到: {output_file}")
-    logger.info("完成！")
+    logger.info(f"Results saved to: {output_file}")
+    logger.info("Completed!")
 
     return top_cwe_df
 
@@ -269,24 +269,24 @@ def check_top_cwe(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="查看 top CWE 类型和名称")
+    parser = argparse.ArgumentParser(description="View top CWE types and names")
     parser.add_argument(
         "--top-n",
         type=int,
         default=3,
-        help="返回前 n 个最常见的 CWE（默认: 3）",
+        help="Return top n most common CWE (default: 3)",
     )
     parser.add_argument(
         "--min-score",
         type=int,
         default=65,
-        help="fixes.score 的最小值（默认: 65）",
+        help="Minimum value of fixes.score (default: 65)",
     )
     parser.add_argument(
         "--languages",
         nargs="+",
         default=["java"],
-        help="编程语言列表，不区分大小写（默认: java）",
+        help="List of programming languages, case-insensitive (default: java)",
     )
 
     args = parser.parse_args()

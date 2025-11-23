@@ -1,213 +1,213 @@
-# 检测重复出现的漏洞代码模式
+# Detecting Recurring Vulnerability Code Patterns
 
-从 MoreFixes 数据库中提取漏洞代码，识别重复出现的漏洞模式，并生成 GitHub 搜索查询。
+Extract vulnerable code from the MoreFixes database, identify recurring vulnerability patterns, and generate GitHub search queries.
 
-## 📋 目录
+## 📋 Table of Contents
 
-- [功能特性](#功能特性)
-- [安装和配置](#安装和配置)
-- [快速开始](#快速开始)
-- [工作流程](#工作流程)
-- [模块结构](#模块结构)
-- [使用方法](#使用方法)
-- [输出结果](#输出结果)
-- [相关文档](#相关文档)
+- [Features](#features)
+- [Installation and Configuration](#installation-and-configuration)
+- [Quick Start](#quick-start)
+- [Workflow](#workflow)
+- [Module Structure](#module-structure)
+- [Usage](#usage)
+- [Output Results](#output-results)
+- [Related Documentation](#related-documentation)
 
-## ✨ 功能特性
+## ✨ Features
 
-1. **数据提取**：从 MoreFixes 数据库中提取高质量的漏洞修复样本
-   - 支持多编程语言（默认 Java）
-   - 可配置的质量阈值（score >= 65，准确率约 95%+）
-   - 自动排除 merge commits
-   - 支持按 CWE 类型筛选（Top N CWE）
+1. **Data Extraction**: Extract high-quality vulnerability fix samples from the MoreFixes database
+   - Support for multiple programming languages (default Java)
+   - Configurable quality threshold (score >= 65, accuracy ~95%+)
+   - Automatically exclude merge commits
+   - Support filtering by CWE type (Top N CWE)
 
-2. **模式识别**：使用 source/sink/taint 分析识别重复漏洞模式
-   - Source 识别：识别不可信输入源（如 `getParameter`, `getHeader` 等）
-   - Sink 识别：识别危险使用点（如 SQL 执行、XSS 输出、路径操作等）
-   - Taint 流分析：追踪数据从 source 到 sink 的传播路径
-   - 安全措施分析：识别缺失的安全措施（如 HTML 转义、路径规范化等）
-   - 支持特定 CWE 类型的针对性分析（CWE-79 XSS、CWE-22 Path Traversal 等）
+2. **Pattern Recognition**: Use source/sink/taint analysis to identify recurring vulnerability patterns
+   - Source identification: Identify untrusted input sources (e.g., `getParameter`, `getHeader`, etc.)
+   - Sink identification: Identify dangerous usage points (e.g., SQL execution, XSS output, path operations, etc.)
+   - Taint flow analysis: Track data propagation paths from source to sink
+   - Security measures analysis: Identify missing security measures (e.g., HTML escaping, path normalization, etc.)
+   - Support targeted analysis for specific CWE types (CWE-79 XSS, CWE-22 Path Traversal, etc.)
 
-3. **查询生成**：为每个识别出的模式生成 GitHub 搜索查询
-   - 基于 source/sink 关键词生成查询
-   - 根据 CWE 类型优化查询关键词
-   - 支持调用 GitHub API 进行实际搜索
-   - 自动处理 GitHub API rate limit
+3. **Query Generation**: Generate GitHub search queries for each identified pattern
+   - Generate queries based on source/sink keywords
+   - Optimize query keywords according to CWE type
+   - Support calling GitHub API for actual searching
+   - Automatically handle GitHub API rate limits
 
-## 🚀 安装和配置
+## 🚀 Installation and Configuration
 
-### 环境要求
+### Requirements
 
 - Python 3.8+
-- PostgreSQL 数据库（MoreFixes 数据库）
-- 相关 Python 包（见 `requirements.txt`）
+- PostgreSQL database (MoreFixes database)
+- Related Python packages (see `requirements.txt`)
 
-### 安装依赖
+### Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 配置环境变量
+### Configure Environment Variables
 
-创建 `.env` 文件并配置数据库连接信息：
+Create a `.env` file and configure database connection information:
 
 ```bash
-# 在项目根目录创建 .env 文件
+# Create .env file in project root directory
 touch .env
 ```
 
-编辑 `.env` 文件，设置以下变量：
+Edit the `.env` file and set the following variables:
 
 ```env
-# 数据库配置
+# Database configuration
 POSTGRES_USER=your_username
 POSTGRES_PASSWORD=your_password
 DB_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=morefixes
 
-# GitHub API 配置（可选，但建议设置以提高 rate limit）
+# GitHub API configuration (optional, but recommended to improve rate limit)
 GITHUB_TOKEN=your_github_personal_access_token
 ```
 
-**注意**: `.env` 文件包含敏感信息，请确保已添加到 `.gitignore` 中，不要提交到版本控制系统。
+**Note**: The `.env` file contains sensitive information. Make sure it's added to `.gitignore` and not committed to version control.
 
-### GitHub Token 获取
+### GitHub Token Setup
 
-如果需要使用 GitHub API 搜索功能，需要创建 GitHub Personal Access Token：
+If you need to use GitHub API search functionality, create a GitHub Personal Access Token:
 
-1. 访问 https://github.com/settings/tokens
-2. 点击 "Generate new token (classic)"
-3. 选择权限：至少需要 `public_repo` 权限
-4. 复制生成的 token 并添加到 `.env` 文件
+1. Visit https://github.com/settings/tokens
+2. Click "Generate new token (classic)"
+3. Select permissions: at least `public_repo` permission is required
+4. Copy the generated token and add it to the `.env` file
 
-## 🎯 快速开始
+## 🎯 Quick Start
 
-### 基本使用
+### Basic Usage
 
 ```bash
 python vulnerability_pattern_miner.py --top-n 3 --min-score 65 --languages java
 ```
 
-### 命令行参数
+### Command Line Arguments
 
-- `--top-n`: 返回出现次数最多的前 n 个 CWE 类型（默认: 3）
-- `--min-score`: fixes.score 的最小值（默认: 65）
-- `--include-merge`: 包含 merge commit（默认: 排除）
-- `--languages`: 编程语言列表，不区分大小写（默认: java）
+- `--top-n`: Return top n CWE types by occurrence count (default: 3)
+- `--min-score`: Minimum value of fixes.score (default: 65)
+- `--include-merge`: Include merge commits (default: excluded)
+- `--languages`: List of programming languages, case-insensitive (default: java)
 
-### 示例
+### Examples
 
 ```bash
-# 提取前 3 个最常见的 Java 漏洞模式（CWE-79, CWE-22 等）
+# Extract top 3 most common Java vulnerability patterns (CWE-79, CWE-22, etc.)
 python vulnerability_pattern_miner.py --top-n 3 --languages java
 
-# 提取前 5 个最常见的漏洞模式
+# Extract top 5 most common vulnerability patterns
 python vulnerability_pattern_miner.py --top-n 5 --languages java
 
-# 提取多个语言的漏洞模式
+# Extract vulnerability patterns for multiple languages
 python vulnerability_pattern_miner.py --top-n 3 --languages java python go
 ```
 
-## 📊 工作流程
+## 📊 Workflow
 
-### Step 1: 数据提取
+### Step 1: Data Extraction
 
-从数据库中提取高质量的漏洞修复样本。
+Extract high-quality vulnerability fix samples from the database.
 
-**筛选条件**：
-- `fixes.score >= 65`（高质量修复样本，准确率约 95%+）
-- `file_change.diff IS NOT NULL`（要求有代码差异）
-- `commits.merge = FALSE`（排除 merge commit，默认）
-- `file_change.programming_language`（支持多语言，默认 Java）
-- 只包含单文件变更的修复（`file_change_count = 1`）
+**Filter Conditions**:
+- `fixes.score >= 65` (high-quality fix samples, accuracy ~95%+)
+- `file_change.diff IS NOT NULL` (require code differences)
+- `commits.merge = FALSE` (exclude merge commits, default)
+- `file_change.programming_language` (support multiple languages, default Java)
+- Only include fixes with single file change (`file_change_count = 1`)
 
-**提取字段**：
-- `cve_id`: CVE 编号
+**Extracted Fields**:
+- `cve_id`: CVE ID
 - `hash`: Commit hash
-- `repo_url`: 仓库 URL
-- `filename`: 文件名
-- `code_before`: 漏洞前的代码
-- `code_after`: 修复后的代码
-- `diff`: 代码差异
+- `repo_url`: Repository URL
+- `filename`: Filename
+- `code_before`: Code before vulnerability
+- `code_after`: Code after fix
+- `diff`: Code differences
 
-**输出**: `output/extract_java_vulnerable_code.csv`
+**Output**: `output/extract_java_vulnerable_code.csv`
 
-### Step 2: CWE 分类与模式识别
+### Step 2: CWE Classification and Pattern Recognition
 
-1. **CWE 分类统计**：统计每个 CWE 类型的 CVE 数量，选出 Top N
-2. **方法级代码提取**：从每个 CVE 中提取方法级代码变更
-3. **Source/Sink/Taint 分析**：
-   - 识别不可信输入源（Source）
-   - 识别危险使用点（Sink）
-   - 追踪数据流（Taint Flow）
-   - 分析缺失的安全措施
-4. **模式过滤**：根据 CWE 类型调整过滤条件
-   - CWE-79 (XSS) 和 CWE-22 (Path Traversal): 需要完整的 source → sink → taint flow
-   - NVD-CWE-noinfo: 放宽条件，只需 source 和 sink
+1. **CWE Classification Statistics**: Count CVE numbers for each CWE type, select Top N
+2. **Method-level Code Extraction**: Extract method-level code changes from each CVE
+3. **Source/Sink/Taint Analysis**:
+   - Identify untrusted input sources (Source)
+   - Identify dangerous usage points (Sink)
+   - Track data flow (Taint Flow)
+   - Analyze missing security measures
+4. **Pattern Filtering**: Adjust filter conditions based on CWE type
+   - CWE-79 (XSS) and CWE-22 (Path Traversal): Require complete source → sink → taint flow
+   - NVD-CWE-noinfo: Relax conditions, only need source and sink
 
-**输出**: `output/cwe_based_patterns_top{n}.csv` 和 `output/top_cwe_top{n}.csv`
+**Output**: `output/cwe_based_patterns_top{n}.csv` and `output/top_cwe_top{n}.csv`
 
-### Step 3: GitHub 查询生成
+### Step 3: GitHub Query Generation
 
-为每个识别出的模式生成 GitHub 搜索查询：
+Generate GitHub search queries for each identified pattern:
 
-1. **查询生成**：基于 source/sink 关键词生成查询字符串
-2. **CWE 类型优化**：根据 CWE 类型优化关键词选择
-3. **文件保存**：自动保存包含查询的 DataFrame
+1. **Query Generation**: Generate query strings based on source/sink keywords
+2. **CWE Type Optimization**: Optimize keyword selection based on CWE type
+3. **File Saving**: Automatically save DataFrame containing queries
 
-**输出**: `output/cwe_based_patterns_top{n}.csv`（包含 `github_query` 列）
+**Output**: `output/cwe_based_patterns_top{n}.csv` (includes `github_query` column)
 
-### Step 4: GitHub API 搜索（可选）
+### Step 4: GitHub API Search (Optional)
 
-调用 GitHub API 进行实际搜索：
+Call GitHub API for actual searching:
 
-1. **批量搜索**：遍历所有生成的查询
-2. **结果提取**：提取仓库、文件路径、URL 等信息
-3. **Rate Limit 处理**：自动处理 API 限制
-4. **结果保存**：保存搜索结果到文件
+1. **Batch Search**: Iterate through all generated queries
+2. **Result Extraction**: Extract repository, file path, URL, and other information
+3. **Rate Limit Handling**: Automatically handle API limits
+4. **Result Saving**: Save search results to file
 
-**输出**: `output/github_search_results.csv`
+**Output**: `output/github_search_results.csv`
 
-## 📁 模块结构
+## 📁 Module Structure
 
 ```
 liacs_system_software_security/
-├── vulnerability_pattern_miner.py       # 主程序入口
-├── github_query_generator.py             # GitHub 查询生成和 API 调用模块
-├── DATABASE_TABLES_EXPLANATION.md       # 数据库表结构说明
-├── VULNERABILITY_PATTERN_MINING.md      # 漏洞模式挖掘流程文档
-├── requirements.txt                     # Python 依赖包列表
-├── docker-compose.yml                   # Docker 配置（可选）
-└── output/                              # 输出目录
+├── vulnerability_pattern_miner.py       # Main program entry point
+├── github_query_generator.py             # GitHub query generation and API call module
+├── DATABASE_TABLES_EXPLANATION.md       # Database table structure documentation
+├── VULNERABILITY_PATTERN_MINING.md      # Vulnerability pattern mining workflow documentation
+├── requirements.txt                     # Python dependency package list
+├── docker-compose.yml                   # Docker configuration (optional)
+└── output/                              # Output directory
     ├── extract_java_vulnerable_code.csv
     ├── top_cwe_top{n}.csv
     ├── cwe_based_patterns_top{n}.csv
-    └── github_search_results.csv        # GitHub API 搜索结果（可选）
+    └── github_search_results.csv        # GitHub API search results (optional)
 ```
 
-### 主要模块说明
+### Main Module Descriptions
 
 #### `vulnerability_pattern_miner.py`
-主程序文件，包含：
-- `DatabaseConnector`: 数据库连接器
-- `extract_java_vulnerable_code()`: 从数据库提取漏洞代码（支持 Top N CWE 筛选）
-- `process_cwe_based_patterns()`: 基于 CWE 的模式识别
-- `extract_vulnerability_pattern()`: 提取漏洞模式（source/sink/taint 分析）
-- `analyze_source_sink_taint()`: 分析 source、sink 和 taint 流
-- `analyze_missing_security()`: 分析缺失的安全措施
-- `main()`: 主函数，协调整个流程
+Main program file, includes:
+- `DatabaseConnector`: Database connector
+- `extract_java_vulnerable_code()`: Extract vulnerable code from database (supports Top N CWE filtering)
+- `process_cwe_based_patterns()`: CWE-based pattern recognition
+- `extract_vulnerability_pattern()`: Extract vulnerability patterns (source/sink/taint analysis)
+- `analyze_source_sink_taint()`: Analyze source, sink, and taint flows
+- `analyze_missing_security()`: Analyze missing security measures
+- `main()`: Main function, coordinates the entire workflow
 
 #### `github_query_generator.py`
-GitHub 查询生成和 API 调用模块，包含：
-- `GitHubQueryGenerator`: GitHub 查询生成器类
-- `generate_github_search_keywords()`: 为 DataFrame 生成 GitHub 查询并保存文件
-- `search_github_code()`: 使用 GitHub API 搜索代码
-- `search_github_with_queries()`: 批量调用 GitHub API 搜索
-- `_make_github_request()`: 底层 API 请求处理（含 rate limit 处理）
+GitHub query generation and API call module, includes:
+- `GitHubQueryGenerator`: GitHub query generator class
+- `generate_github_search_keywords()`: Generate GitHub queries for DataFrame and save file
+- `search_github_code()`: Search code using GitHub API
+- `search_github_with_queries()`: Batch call GitHub API for searching
+- `_make_github_request()`: Low-level API request handling (includes rate limit handling)
 
-## 💻 使用方法
+## 💻 Usage
 
 ### Python API
 
@@ -221,21 +221,21 @@ from vulnerability_pattern_miner import (
 )
 from github_query_generator import GitHubQueryGenerator
 
-# 初始化数据库连接
+# Initialize database connection
 db_connector = DatabaseConnector()
 
-# 提取漏洞代码（包含 Top N CWE 筛选）
+# Extract vulnerable code (includes Top N CWE filtering)
 vulnerable_code_df = extract_java_vulnerable_code(
     db_connector,
     min_score=65,
     exclude_merge_commits=True,
     programming_languages=["Java"],
     require_diff=True,
-    top_n=3,  # 只提取 Top 3 CWE 的数据
+    top_n=3,  # Only extract data for Top 3 CWE
     output_dir=Path("output")
 )
 
-# 识别重复模式（基于 CWE）
+# Identify recurring patterns (CWE-based)
 recurring_patterns_df = process_cwe_based_patterns(
     vulnerable_code_df,
     db_connector,
@@ -245,7 +245,7 @@ recurring_patterns_df = process_cwe_based_patterns(
     output_dir=Path("output")
 )
 
-# 生成 GitHub 查询
+# Generate GitHub queries
 query_generator = GitHubQueryGenerator()
 recurring_patterns_df = query_generator.generate_github_search_keywords(
     recurring_patterns_df,
@@ -254,7 +254,7 @@ recurring_patterns_df = query_generator.generate_github_search_keywords(
     save_file=True
 )
 
-# 调用 GitHub API 搜索（可选）
+# Call GitHub API to search (optional)
 if len(recurring_patterns_df) > 0:
     results_df = query_generator.search_github_with_queries(
         recurring_patterns_df,
@@ -265,7 +265,7 @@ if len(recurring_patterns_df) > 0:
     )
 ```
 
-### 直接运行主程序
+### Run Main Program Directly
 
 ```python
 from vulnerability_pattern_miner import main
@@ -279,124 +279,124 @@ main(
 )
 ```
 
-## 📤 输出结果
+## 📤 Output Results
 
-### 原始数据 (`extract_java_vulnerable_code.csv`)
+### Raw Data (`extract_java_vulnerable_code.csv`)
 
-包含以下字段：
-- `cve_id`: CVE 编号
+Contains the following fields:
+- `cve_id`: CVE ID
 - `hash`: Commit hash
-- `repo_url`: 仓库 URL
-- `filename`: 文件名
-- `score`: 修复质量分数
-- `programming_language`: 编程语言
-- `diff`: 代码差异
+- `repo_url`: Repository URL
+- `filename`: Filename
+- `score`: Fix quality score
+- `programming_language`: Programming language
+- `diff`: Code differences
 
-### Top CWE 列表 (`top_cwe_top{n}.csv`)
+### Top CWE List (`top_cwe_top{n}.csv`)
 
-包含以下字段：
-- `cwe_id`: CWE 编号
-- `cwe_name`: CWE 名称
-- `fix_count`: 该 CWE 的修复数量
+Contains the following fields:
+- `cwe_id`: CWE ID
+- `cwe_name`: CWE name
+- `fix_count`: Number of fixes for this CWE
 
-### 模式记录 (`cwe_based_patterns_top{n}.csv`)
+### Pattern Records (`cwe_based_patterns_top{n}.csv`)
 
-包含以下字段：
-- `cwe_id`: CWE 编号
-- `cwe_name`: CWE 名称
-- `cve_id`: CVE 编号
-- `file_change_id`: 文件变更 ID
-- `method_change_id`: 方法变更 ID
-- `method_name`: 方法名
-- `signature`: 方法签名
-- `sources`: Source 列表（JSON 字符串）
-- `sinks`: Sink 列表（JSON 字符串）
-- `taint_flows`: Taint 流列表（JSON 字符串）
-- `tainted_variables`: 被污染的变量列表（JSON 字符串）
-- `missing_sanitizers`: 缺失的 sanitizer 列表（JSON 字符串）
-- `added_security_measures`: 新增的安全措施列表（JSON 字符串）
-- `github_query`: GitHub 搜索查询字符串
-- `method_code`: 方法代码（前 500 字符）
+Contains the following fields:
+- `cwe_id`: CWE ID
+- `cwe_name`: CWE name
+- `cve_id`: CVE ID
+- `file_change_id`: File change ID
+- `method_change_id`: Method change ID
+- `method_name`: Method name
+- `signature`: Method signature
+- `sources`: Source list (JSON string)
+- `sinks`: Sink list (JSON string)
+- `taint_flows`: Taint flow list (JSON string)
+- `tainted_variables`: List of tainted variables (JSON string)
+- `missing_sanitizers`: List of missing sanitizers (JSON string)
+- `added_security_measures`: List of added security measures (JSON string)
+- `github_query`: GitHub search query string
+- `method_code`: Method code (first 500 characters)
 
-### GitHub 搜索结果 (`github_search_results.csv`)
+### GitHub Search Results (`github_search_results.csv`)
 
-如果调用了 GitHub API，会生成此文件，包含：
-- 所有模式记录的字段
-- `github_search_results`: 搜索结果列表（JSON 字符串）
-- `github_result_count`: 结果数量
+If GitHub API is called, this file will be generated, containing:
+- All pattern record fields
+- `github_search_results`: List of search results (JSON string)
+- `github_result_count`: Number of results
 
-每个搜索结果包含：
-- `repository`: 仓库全名（如 `owner/repo`）
-- `repository_url`: 仓库 URL
-- `path`: 文件路径
+Each search result contains:
+- `repository`: Repository full name (e.g., `owner/repo`)
+- `repository_url`: Repository URL
+- `path`: File path
 - `url`: API URL
-- `html_url`: GitHub 网页 URL
-- `sha`: 文件 SHA
+- `html_url`: GitHub web page URL
+- `sha`: File SHA
 
-## 🔧 配置说明
+## 🔧 Configuration
 
-### CWE 类型支持
+### CWE Type Support
 
-当前支持以下 CWE 类型的针对性分析：
+Currently supports targeted analysis for the following CWE types:
 
 - **CWE-79**: Cross-site Scripting (XSS)
-  - 重点关注 XSS sinks（println, print, innerHTML 等）
-  - 检查 HTML 转义安全措施
+  - Focus on XSS sinks (println, print, innerHTML, etc.)
+  - Check HTML escaping security measures
 
 - **CWE-22**: Path Traversal
-  - 重点关注文件操作 sinks（new File, Files.readAllBytes 等）
-  - 检查路径规范化安全措施
+  - Focus on file operation sinks (new File, Files.readAllBytes, etc.)
+  - Check path normalization security measures
 
 - **NVD-CWE-noinfo**: Insufficient Information
-  - 使用通用模式匹配
-  - 放宽过滤条件
+  - Use generic pattern matching
+  - Relax filter conditions
 
 ### GitHub API Rate Limit
 
-- **未认证**: 60 请求/小时
-- **已认证**: 5000 请求/小时（需要设置 `GITHUB_TOKEN`）
+- **Unauthenticated**: 60 requests/hour
+- **Authenticated**: 5000 requests/hour (requires setting `GITHUB_TOKEN`)
 
-程序会自动处理 rate limit，当达到限制时会等待重置。
+The program automatically handles rate limits and will wait for reset when the limit is reached.
 
-### 性能优化
+### Performance Optimization
 
-- 使用 `top_n` 参数限制处理的 CWE 数量
-- 对于大量数据，建议先测试小规模数据
-- GitHub API 搜索可能需要较长时间，建议在后台运行
+- Use `top_n` parameter to limit the number of CWE types processed
+- For large datasets, recommend testing with small-scale data first
+- GitHub API search may take a long time, recommend running in background
 
-## 📝 示例输出
+## 📝 Example Output
 
-运行程序后，会在控制台输出统计信息：
+After running the program, statistics will be output to the console:
 
 ```
 ============================================================
-统计信息:
-  总记录数: 1234
-  唯一 CVE 数: 567
-  唯一 commit 数: 890
-  唯一仓库数: 234
-  唯一文件数: 456
-  识别出的重复模式数: 45
-  生成的 GitHub 查询数: 45
+Statistics:
+  Total records: 1234
+  Unique CVE count: 567
+  Unique commit count: 890
+  Unique repository count: 234
+  Unique file count: 456
+  Identified recurring patterns: 45
+  Generated GitHub queries: 45
 ============================================================
 ```
 
-## 📚 相关文档
+## 📚 Related Documentation
 
-- [DATABASE_TABLES_EXPLANATION.md](DATABASE_TABLES_EXPLANATION.md): 数据库表结构详细说明
-- [VULNERABILITY_PATTERN_MINING.md](VULNERABILITY_PATTERN_MINING.md): 漏洞模式挖掘完整流程文档
+- [DATABASE_TABLES_EXPLANATION.md](DATABASE_TABLES_EXPLANATION.md): Detailed database table structure documentation
+- [VULNERABILITY_PATTERN_MINING.md](VULNERABILITY_PATTERN_MINING.md): Complete vulnerability pattern mining workflow documentation
 
-## 🔍 支持的 CWE 类型
+## 🔍 Supported CWE Types
 
-当前主要支持以下 Top 3 CWE 类型：
+Currently mainly supports the following Top 3 CWE types:
 
 1. **CWE-79**: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')
 2. **NVD-CWE-noinfo**: Insufficient Information
 3. **CWE-22**: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')
 
-## ⚠️ 注意事项
+## ⚠️ Notes
 
-1. **数据库连接**：确保数据库连接配置正确，且数据库可访问
-2. **GitHub Token**：如果使用 GitHub API，建议设置 token 以提高 rate limit
-3. **数据量**：处理大量数据时可能需要较长时间，建议先测试小规模数据
-4. **API 限制**：GitHub API 有 rate limit，程序会自动处理，但可能需要等待
+1. **Database Connection**: Ensure database connection configuration is correct and database is accessible
+2. **GitHub Token**: If using GitHub API, recommend setting token to improve rate limit
+3. **Data Volume**: Processing large amounts of data may take a long time, recommend testing with small-scale data first
+4. **API Limits**: GitHub API has rate limits, program will handle automatically, but may need to wait
