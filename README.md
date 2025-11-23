@@ -180,7 +180,7 @@ Automated GitHub code search with TF-IDF keyword expansion:
 python3 github_code_scraper.py --input-file output/cwe_based_patterns_top3.csv --language java
 ```
 
-**Output**: `output/github_search_results.csv`
+**Output**: Results are displayed in console (no CSV file generated)
 
 #### Option B: Using `github_query_generator.py` API
 
@@ -189,9 +189,7 @@ Direct GitHub API search using the query generator:
 1. **Batch Search**: Iterate through all generated queries
 2. **Result Extraction**: Extract repository, file path, URL, and other information
 3. **Rate Limit Handling**: Automatically handle API limits
-4. **Result Saving**: Save search results to file
-
-**Output**: `output/github_search_results.csv`
+4. **Result Saving**: Results are returned in DataFrame (no CSV file generated)
 
 ## 📁 Module Structure
 
@@ -211,7 +209,6 @@ liacs_system_software_security/
     ├── extract_java_vulnerable_code.csv
     ├── top_cwe_top{n}.csv
     ├── cwe_based_patterns_top{n}.csv
-    └── github_search_results.csv        # GitHub API search results (optional)
 ```
 
 ### Main Module Descriptions
@@ -298,7 +295,6 @@ subprocess.run([
     "python3", "github_code_scraper.py",
     "--input-file", "output/cwe_based_patterns_top3.csv",
     "--language", "java",
-    "--output-file", "output/github_search_results.csv",
     "--min-stars", "100",
     "--max-results-per-query", "1000"
 ])

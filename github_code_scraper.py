@@ -207,12 +207,41 @@ def search_code(
             SEARCH_API_URL, headers=HEADERS, params=params, timeout=30
         )
 
-        # Handle rate limiting
+        # Handle rate limiting - check before and after request
+        rate_limit_remaining = get_rate_limit_remaining(response.headers)
+
+        # If 403 Forbidden (rate limit exceeded), wait and retry
+        if response.status_code == 403:
+            reset_time = get_rate_limit_reset_time(response.headers)
+            if reset_time > 0:
+                sleep_time = max(0, reset_time - time.time()) + 5  # Add 5 second buffer
+                logger.warning(
+                    f"Rate limit exceeded (403), waiting {sleep_time:.0f} seconds until reset..."
+                )
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                # Retry request after waiting
+                response = requests.get(
+                    SEARCH_API_URL, headers=HEADERS, params=params, timeout=30
+                )
+            else:
+                # If no reset time in headers, wait 60 seconds
+                logger.warning(
+                    "Rate limit exceeded but no reset time found, waiting 60 seconds..."
+                )
+                time.sleep(60)
+                response = requests.get(
+                    SEARCH_API_URL, headers=HEADERS, params=params, timeout=30
+                )
+
+        # Handle rate limiting - check remaining quota
         rate_limit_remaining = get_rate_limit_remaining(response.headers)
         if rate_limit_remaining <= 1:
             reset_time = get_rate_limit_reset_time(response.headers)
-            sleep_time = reset_time - time.time() + 2  # Add 2 second buffer
-            logger.warning(f"Rate limit reached, waiting {sleep_time:.0f} seconds...")
+            sleep_time = max(0, reset_time - time.time()) + 2  # Add 2 second buffer
+            logger.warning(
+                f"Rate limit low ({rate_limit_remaining} remaining), waiting {sleep_time:.0f} seconds..."
+            )
             if sleep_time > 0:
                 time.sleep(max(sleep_time, 61))
             # Retry request
@@ -224,6 +253,9 @@ def search_code(
             logger.error(
                 f"GitHub API error: {response.status_code} - {response.text[:200]}"
             )
+            # If still 403 after retry, wait longer and return
+            if response.status_code == 403:
+                logger.error("Still rate limited after retry, skipping this query")
             return
 
         response_data = response.json()
