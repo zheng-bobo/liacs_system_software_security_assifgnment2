@@ -621,7 +621,7 @@ def scrape_github_code(
             stars = repo_info.get("stargazers_count", 0)
 
             if stars < min_stars:
-                logger.info(
+                logger.debug(
                     f"Repository {repo_name} stars ({stars}) < {min_stars}, skipping"
                 )
                 continue

@@ -209,6 +209,9 @@ liacs_system_software_security/
     ├── extract_java_vulnerable_code.csv
     ├── top_cwe_top{n}.csv
     ├── cwe_based_patterns_top{n}.csv
+    ├── pattern_instances.csv
+    ├── github_query.csv
+    └── github_search_results.csv
 ```
 
 ### Main Module Descriptions
@@ -362,6 +365,35 @@ Contains the following fields:
 - `added_security_measures`: List of added security measures (JSON string)
 - `github_query`: GitHub search query string
 - `method_code`: Method code (first 500 characters)
+
+### Pattern Instances (`pattern_instances.csv`)
+
+Contains detailed instance-level information for each vulnerability pattern occurrence:
+- `pattern_key`: Unique pattern identifier (combines CWE, sink types, and source types)
+- `cwe_id`: CWE ID
+- `cwe_name`: CWE name
+- `sink_types`: Comma-separated list of sink types
+- `source_types`: Comma-separated list of source types
+- `missing_sanitizers`: List of missing sanitizers (JSON string)
+- `cve_id`: CVE ID
+- `hash`: Commit hash
+- `repo_url`: Repository URL
+- `commit_link`: Full commit URL
+- `method_name`: Method name
+- `signature`: Method signature
+- `code_diff`: Code differences (patch format)
+- `github_query`: GitHub search query string
+
+This file contains one row per vulnerability instance, allowing detailed analysis of pattern occurrences across different CVEs and repositories.
+
+### GitHub Query List (`github_query.csv`)
+
+Contains a simplified list of GitHub search queries grouped by CWE:
+- `cwe_id`: CWE ID
+- `cwe_name`: CWE name
+- `github_query`: GitHub search query string
+
+This file provides a quick reference of all generated GitHub queries organized by vulnerability type, useful for manual searching or batch processing.
 
 ### GitHub Search Results (`github_search_results.csv`)
 
