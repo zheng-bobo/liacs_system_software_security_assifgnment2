@@ -19,7 +19,11 @@ Extract vulnerable code from the MoreFixes database, identify recurring vulnerab
 - [Module Structure](#module-structure)
 - [Usage](#usage)
 - [Output Results](#output-results)
+- [Configuration](#configuration)
+- [Example Output](#example-output)
 - [Related Documentation](#related-documentation)
+- [Supported CWE Types](#supported-cwe-types)
+- [Notes](#notes)
 
 ## ✨ Features
 
@@ -49,8 +53,6 @@ Extract vulnerable code from the MoreFixes database, identify recurring vulnerab
 - Python 3.8+
 - PostgreSQL database (MoreFixes database)
 - Related Python packages (see `requirements.txt`)
-- CodeQL CLI (optional, for patch validation)
-- Semgrep CLI (optional, for static analysis)
 
 ### Install Dependencies
 
