@@ -1,5 +1,13 @@
 # Detecting Recurring Vulnerability Code Patterns
 
+**Leiden University - 2526-S1 System & Software Security - Assignment 2**
+
+**Group Members:**
+- Xuzhang Zheng (s4414268)
+- Xing He (s4707443)
+
+---
+
 Extract vulnerable code from the MoreFixes database, identify recurring vulnerability patterns, and generate GitHub search queries.
 
 ## 📋 Table of Contents
