@@ -133,6 +133,7 @@ Extract high-quality vulnerability fix samples from the database.
 - `file_change.diff IS NOT NULL` (require code differences)
 - `commits.merge = FALSE` (exclude merge commits, default)
 - `file_change.programming_language` (support multiple languages, default Java)
+- Exclude test files: filter out files with "Test" or "Tests" in filename
 - Only include fixes with single file change (`file_change_count = 1`)
 
 **Extracted Fields**:
